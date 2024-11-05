@@ -21,18 +21,17 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 
-#define REPORT_PROTOCOL_MOUSE_REPORT_SIZE      (4)
-#define REPORT_BUFFER_SIZE                     REPORT_PROTOCOL_MOUSE_REPORT_SIZE
+#define PS4_REPORT_BUFFER_SIZE                  64
 
-static const char local_device_name[] = "PSVitaCustomController";
+static const char local_device_name[] = "Wireless Controller";
 
 typedef struct {
     esp_hidd_app_param_t app_param;
     esp_hidd_qos_param_t both_qos;
     uint8_t protocol_mode;
-    SemaphoreHandle_t mouse_mutex;
-    TaskHandle_t mouse_task_hdl;
-    uint8_t buffer[REPORT_BUFFER_SIZE];
+    SemaphoreHandle_t controller_mutex;
+    TaskHandle_t controller_task_hdl;
+    uint8_t buffer[PS4_REPORT_BUFFER_SIZE];
     int8_t x_dir;
 } local_param_t;
 
@@ -41,38 +40,51 @@ static local_param_t s_local_param = {0};
 // HID report descriptor for a generic mouse. The contents of the report are:
 // 3 buttons, moving information for X and Y cursors, information for a wheel.
 uint8_t hid_ps4_descriptor[] = {
-    0x05, 0x01,                      // USAGE_PAGE (Generic Desktop)
-    0x09, 0x05,                      // USAGE (Game Pad)
-    0xa1, 0x01,                      // COLLECTION (Application)
-    0x85, 0x01,                      // REPORT_ID (1)
+    0x05, 0x01,                   // USAGE_PAGE (Generic Desktop)
+    0x09, 0x05,                   // USAGE (Gamepad)
+    0xA1, 0x01,                   // COLLECTION (Application)
+    0x85, 0x01,                   // REPORT_ID (1)
 
-    // Buttons
-    0x05, 0x09,                      // USAGE_PAGE (Button)
-    0x19, 0x01,                      // USAGE_MINIMUM (Button 1)
-    0x29, 0x10,                      // USAGE_MAXIMUM (Button 16)
-    0x15, 0x00,                      // LOGICAL_MINIMUM (0)
-    0x25, 0x01,                      // LOGICAL_MAXIMUM (1)
-    0x75, 0x01,                      // REPORT_SIZE (1)
-    0x95, 0x10,                      // REPORT_COUNT (16)
-    0x81, 0x02,                      // INPUT (Data, Var, Abs)
+    // Buttons (Cross, Circle, Square, Triangle, L1, R1, etc.)
+    0x05, 0x09,                   // USAGE_PAGE (Button)
+    0x19, 0x01,                   // USAGE_MINIMUM (Button 1)
+    0x29, 0x10,                   // USAGE_MAXIMUM (Button 16)
+    0x15, 0x00,                   // LOGICAL_MINIMUM (0)
+    0x25, 0x01,                   // LOGICAL_MAXIMUM (1)
+    0x75, 0x01,                   // REPORT_SIZE (1)
+    0x95, 0x10,                   // REPORT_COUNT (16)
+    0x81, 0x02,                   // INPUT (Data,Var,Abs)
 
-    // X and Y axes
-    0x05, 0x01,                      // USAGE_PAGE (Generic Desktop)
-    0x09, 0x30,                      // USAGE (X)
-    0x09, 0x31,                      // USAGE (Y)
-    0x15, 0x81,                      // LOGICAL_MINIMUM (-127)
-    0x25, 0x7f,                      // LOGICAL_MAXIMUM (127)
-    0x75, 0x08,                      // REPORT_SIZE (8)
-    0x95, 0x02,                      // REPORT_COUNT (2)
-    0x81, 0x02,                      // INPUT (Data, Var, Abs)
+    // Left stick X and Y
+    0x05, 0x01,                   // USAGE_PAGE (Generic Desktop)
+    0x09, 0x30,                   // USAGE (X)
+    0x09, 0x31,                   // USAGE (Y)
+    0x15, 0x81,                   // LOGICAL_MINIMUM (-127)
+    0x25, 0x7F,                   // LOGICAL_MAXIMUM (127)
+    0x75, 0x08,                   // REPORT_SIZE (8)
+    0x95, 0x02,                   // REPORT_COUNT (2)
+    0x81, 0x02,                   // INPUT (Data,Var,Abs)
 
-    // Rz and Z axes (optional)
-    0x09, 0x32,                      // USAGE (Z)
-    0x09, 0x35,                      // USAGE (Rz)
-    0x81, 0x02,                      // INPUT (Data, Var, Abs)
+    // Right stick X and Y
+    0x09, 0x32,                   // USAGE (Z)
+    0x09, 0x35,                   // USAGE (Rz)
+    0x15, 0x81,                   // LOGICAL_MINIMUM (-127)
+    0x25, 0x7F,                   // LOGICAL_MAXIMUM (127)
+    0x75, 0x08,                   // REPORT_SIZE (8)
+    0x95, 0x02,                   // REPORT_COUNT (2)
+    0x81, 0x02,                   // INPUT (Data,Var,Abs)
 
-    // End Collection
-    0xc0                             // END_COLLECTION
+    // Pressure-sensitive L2 and R2 triggers
+    0x05, 0x01,                   // USAGE_PAGE (Generic Desktop)
+    0x09, 0x33,                   // USAGE (Rx)
+    0x09, 0x34,                   // USAGE (Ry)
+    0x15, 0x00,                   // LOGICAL_MINIMUM (0)
+    0x26, 0xFF, 0x00,             // LOGICAL_MAXIMUM (255)
+    0x75, 0x08,                   // REPORT_SIZE (8)
+    0x95, 0x02,                   // REPORT_COUNT (2)
+    0x81, 0x02,                   // INPUT (Data,Var,Abs)
+
+    0xC0                          // END_COLLECTION
 };
 
 static char *bda2str(esp_bd_addr_t bda, char *str, size_t size)
@@ -80,10 +92,8 @@ static char *bda2str(esp_bd_addr_t bda, char *str, size_t size)
     if (bda == NULL || str == NULL || size < 18) {
         return NULL;
     }
-
     uint8_t *p = bda;
-    sprintf(str, "%02x:%02x:%02x:%02x:%02x:%02x",
-            p[0], p[1], p[2], p[3], p[4], p[5]);
+    sprintf(str, "%02x:%02x:%02x:%02x:%02x:%02x", p[0], p[1], p[2], p[3], p[4], p[5]);
     return str;
 }
 
@@ -98,7 +108,7 @@ const int hid_ps4_descriptor_len = sizeof(hid_ps4_descriptor);
 bool check_report_id_type(uint8_t report_id, uint8_t report_type)
 {
     bool ret = false;
-    xSemaphoreTake(s_local_param.mouse_mutex, portMAX_DELAY);
+    xSemaphoreTake(s_local_param.controller_mutex, portMAX_DELAY);
     do {
         if (report_type != ESP_HIDD_REPORT_TYPE_INPUT) {
             break;
@@ -123,89 +133,64 @@ bool check_report_id_type(uint8_t report_id, uint8_t report_type)
             esp_bt_hid_device_report_error(ESP_HID_PAR_HANDSHAKE_RSP_ERR_INVALID_REP_ID);
         }
     }
-    xSemaphoreGive(s_local_param.mouse_mutex);
+    xSemaphoreGive(s_local_param.controller_mutex);
     return ret;
 }
 
 // send the buttons, change in x, and change in y
-void send_gamepad_report(uint16_t buttons, int8_t left_x, int8_t left_y, int8_t right_x, int8_t right_y)
+
+void send_ps4_report(uint16_t buttons, int8_t left_x, int8_t left_y, int8_t right_x, int8_t right_y, uint8_t l2, uint8_t r2)
 {
-    xSemaphoreTake(s_local_param.mouse_mutex, portMAX_DELAY);
+    xSemaphoreTake(s_local_param.controller_mutex, portMAX_DELAY);
 
-    s_local_param.buffer[0] = buttons & 0xFF;          // Lower 8 bits of buttons
-    s_local_param.buffer[1] = (buttons >> 8) & 0xFF;   // Upper 8 bits of buttons
-    s_local_param.buffer[2] = left_x;                  // Left stick X-axis
-    s_local_param.buffer[3] = left_y;                  // Left stick Y-axis
-    s_local_param.buffer[4] = right_x;                 // Right stick X-axis (if used)
-    s_local_param.buffer[5] = right_y;                 // Right stick Y-axis (if used)
+    s_local_param.buffer[0] = buttons & 0xFF;       // Lower 8 bits of buttons
+    s_local_param.buffer[1] = (buttons >> 8) & 0xFF; // Upper 8 bits of buttons
+    s_local_param.buffer[2] = left_x;               // Left stick X
+    s_local_param.buffer[3] = left_y;               // Left stick Y
+    s_local_param.buffer[4] = right_x;              // Right stick X
+    s_local_param.buffer[5] = right_y;              // Right stick Y
+    s_local_param.buffer[6] = l2;                   // L2 trigger
+    s_local_param.buffer[7] = r2;                   // R2 trigger
 
-    esp_bt_hid_device_send_report(ESP_HIDD_REPORT_TYPE_INTRDATA, 0x01, 6, s_local_param.buffer);
-    xSemaphoreGive(s_local_param.mouse_mutex);
+    esp_bt_hid_device_send_report(ESP_HIDD_REPORT_TYPE_INTRDATA, 0x01, 8, s_local_param.buffer);
+    xSemaphoreGive(s_local_param.controller_mutex);
 }
 
 // move the mouse left and right
-void gamepad_task(void *pvParameters)
+void controller_task(void *pvParameters)
 {
-    const char *TAG = "gamepad_task";
+    const char *TAG = "controller_task";
+    ESP_LOGI(TAG, "Starting PS4 controller emulation");
 
-    ESP_LOGI(TAG, "starting gamepad simulation");
-
-    // Initialize L2 and R2 values
-    uint8_t l2 = 0; // L2 button value (0-255)
-    uint8_t r2 = 0; // R2 button value (0-255)
-    bool increasing_l2 = true; // Flag to track L2 value direction
-    bool increasing_r2 = true; // Flag to track R2 value direction
-
-    // Alternating button state variables
-    uint16_t buttons = 0;     // Button bit mask (no buttons pressed initially)
-    bool toggle_button = false; // Toggle flag for alternating buttons
+    uint16_t buttons = 0;
+    bool toggle_button = false;
+    uint8_t l2 = 0, r2 = 0;
+    bool increasing_l2 = true, increasing_r2 = true;
 
     for (;;) {
-        // Alternate between Button 1 and Button 2 every cycle
-        if (toggle_button) {
-            buttons = 0x0001;  // Set bit 0 for Button 1
-        } else {
-            buttons = 0x0002;  // Set bit 1 for Button 2
-        }
-        toggle_button = !toggle_button; // Toggle the button state
+        buttons = toggle_button ? 0x0001 : 0x0002; // Toggle buttons
+        toggle_button = !toggle_button;
 
-        // Increment or decrement L2 value
         if (increasing_l2) {
-            l2 += 5; // Increase by 5
-            if (l2 >= 255) { // Max value reached
-                l2 = 255;
-                increasing_l2 = false; // Start decreasing
-            }
+            l2 += 5;
+            if (l2 >= 255) increasing_l2 = false;
         } else {
-            l2 -= 5; // Decrease by 5
-            if (l2 <= 0) { // Min value reached
-                l2 = 0;
-                increasing_l2 = true; // Start increasing
-            }
+            l2 -= 5;
+            if (l2 <= 0) increasing_l2 = true;
         }
 
-        // Increment or decrement R2 value
         if (increasing_r2) {
-            r2 += 5; // Increase by 5
-            if (r2 >= 255) { // Max value reached
-                r2 = 255;
-                increasing_r2 = false; // Start decreasing
-            }
+            r2 += 5;
+            if (r2 >= 255) increasing_r2 = false;
         } else {
-            r2 -= 5; // Decrease by 5
-            if (r2 <= 0) { // Min value reached
-                r2 = 0;
-                increasing_r2 = true; // Start increasing
-            }
+            r2 -= 5;
+            if (r2 <= 0) increasing_r2 = true;
         }
 
-        // Log current L2, R2, and button values for debugging
-        ESP_LOGI(TAG, "L2: %d, R2: %d, Buttons: 0x%04X", l2, r2, buttons);
+        ESP_LOGI(TAG, "Buttons: 0x%04X, L2: %d, R2: %d", buttons, l2, r2);
+        send_ps4_report(buttons, 0, 0, 0, 0, l2, r2);
 
-        // Send gamepad report with current button states and L2/R2 values
-        send_gamepad_report(buttons, 0, 0, l2, r2);
-
-        vTaskDelay(100 / portTICK_PERIOD_MS); // Adjust delay as necessary
+        vTaskDelay(100 / portTICK_PERIOD_MS);
     }
 }
 
@@ -268,22 +253,22 @@ void esp_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
 
 void bt_app_task_start_up(void)
 {
-    s_local_param.mouse_mutex = xSemaphoreCreateMutex();
-    memset(s_local_param.buffer, 0, REPORT_BUFFER_SIZE);
-    xTaskCreate(gamepad_task, "gamepad_task", 2 * 1024, NULL, configMAX_PRIORITIES - 3, &s_local_param.mouse_task_hdl);
+    s_local_param.controller_mutex = xSemaphoreCreateMutex();
+    memset(s_local_param.buffer, 0, PS4_REPORT_BUFFER_SIZE);
+    xTaskCreate(controller_task, "controller_task", 2 * 1024, NULL, configMAX_PRIORITIES - 3, &s_local_param.controller_task_hdl);
     return;
 }
 
 void bt_app_task_shut_down(void)
 {
-    if (s_local_param.mouse_task_hdl) {
-        vTaskDelete(s_local_param.mouse_task_hdl);
-        s_local_param.mouse_task_hdl = NULL;
+    if (s_local_param.controller_task_hdl) {
+        vTaskDelete(s_local_param.controller_task_hdl);
+        s_local_param.controller_task_hdl = NULL;
     }
 
-    if (s_local_param.mouse_mutex) {
-        vSemaphoreDelete(s_local_param.mouse_mutex);
-        s_local_param.mouse_mutex = NULL;
+    if (s_local_param.controller_mutex) {
+        vSemaphoreDelete(s_local_param.controller_mutex);
+        s_local_param.controller_mutex = NULL;
     }
     return;
 }
@@ -378,15 +363,15 @@ void esp_bt_hidd_cb(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *param)
             uint16_t report_len;
             if (s_local_param.protocol_mode == ESP_HIDD_REPORT_MODE) {
                 report_id = 0;
-                report_len = REPORT_PROTOCOL_MOUSE_REPORT_SIZE;
+                report_len = PS4_REPORT_BUFFER_SIZE;
             } else {
                 // Boot Mode
                 report_id = ESP_HIDD_BOOT_REPORT_ID_MOUSE;
                 report_len = ESP_HIDD_BOOT_REPORT_SIZE_MOUSE - 1;
             }
-            xSemaphoreTake(s_local_param.mouse_mutex, portMAX_DELAY);
+            xSemaphoreTake(s_local_param.controller_mutex, portMAX_DELAY);
             esp_bt_hid_device_send_report(param->get_report.report_type, report_id, report_len, s_local_param.buffer);
-            xSemaphoreGive(s_local_param.mouse_mutex);
+            xSemaphoreGive(s_local_param.controller_mutex);
         } else {
             ESP_LOGE(TAG, "check_report_id failed!");
         }
@@ -398,15 +383,15 @@ void esp_bt_hidd_cb(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *param)
         ESP_LOGI(TAG, "ESP_HIDD_SET_PROTOCOL_EVT");
         if (param->set_protocol.protocol_mode == ESP_HIDD_BOOT_MODE) {
             ESP_LOGI(TAG, "  - boot protocol");
-            xSemaphoreTake(s_local_param.mouse_mutex, portMAX_DELAY);
+            xSemaphoreTake(s_local_param.controller_mutex, portMAX_DELAY);
             s_local_param.x_dir = -1;
-            xSemaphoreGive(s_local_param.mouse_mutex);
+            xSemaphoreGive(s_local_param.controller_mutex);
         } else if (param->set_protocol.protocol_mode == ESP_HIDD_REPORT_MODE) {
             ESP_LOGI(TAG, "  - report protocol");
         }
-        xSemaphoreTake(s_local_param.mouse_mutex, portMAX_DELAY);
+        xSemaphoreTake(s_local_param.controller_mutex, portMAX_DELAY);
         s_local_param.protocol_mode = param->set_protocol.protocol_mode;
-        xSemaphoreGive(s_local_param.mouse_mutex);
+        xSemaphoreGive(s_local_param.controller_mutex);
         break;
     case ESP_HIDD_INTR_DATA_EVT:
         ESP_LOGI(TAG, "ESP_HIDD_INTR_DATA_EVT");
@@ -489,10 +474,10 @@ void app_main(void)
     // Initialize HID SDP information and L2CAP parameters.
     // to be used in the call of `esp_bt_hid_device_register_app` after profile initialization finishes
     do {
-        s_local_param.app_param.name = "PsVitaController";
-        s_local_param.app_param.description = "R2L2R3L3Buttons";
-        s_local_param.app_param.provider = "ESP32";
-        s_local_param.app_param.subclass = ESP_HID_CLASS_MIC; // keep same with minor class of COD
+        s_local_param.app_param.name = "Wireless Controller";
+        s_local_param.app_param.description = "Wireless Controller";
+        s_local_param.app_param.provider = "Sony";
+        s_local_param.app_param.subclass = ESP_HID_CLASS_GPD; // keep same with minor class of COD
         s_local_param.app_param.desc_list = hid_ps4_descriptor;
         s_local_param.app_param.desc_list_len = hid_ps4_descriptor_len;
 
