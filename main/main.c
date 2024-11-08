@@ -22,6 +22,9 @@
 #include "freertos/semphr.h"
 
 #define PS4_REPORT_BUFFER_SIZE                  64
+#define CUSTOM_VID 0x1234  // Replace with your Vendor ID
+#define CUSTOM_PID 0xABCD  // Replace with your Product ID
+
 
 static const char local_device_name[] = "Wireless Controller";
 
@@ -34,6 +37,18 @@ typedef struct {
     uint8_t buffer[PS4_REPORT_BUFFER_SIZE];
     int8_t x_dir;
 } local_param_t;
+
+
+// static esp_hid_device_config_t bt_hid_config = {
+//     .vendor_id          = 0x16C0,
+//     .product_id         = 0x05DF,
+//     .version            = 0x0100,
+//     .device_name        = "Wireless Controller",
+//     .manufacturer_name  = "Espressif",
+//     .serial_number      = "1234567890",
+//     .report_maps_len    = 1
+// };
+
 
 static local_param_t s_local_param = {0};
 
