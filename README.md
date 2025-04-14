@@ -1,5 +1,5 @@
 # premise
-Similar to ![ESP32GamepadEmulation](https://github.com/Zucchy00/ESP32GamepadEmulation) this work's with the same logic however this aims to be lighter as code as this will only emulate ps3 controller to add the only missing buttons. 
+Similar to [ESP32GamepadEmulation](https://github.com/Zucchy00/ESP32GamepadEmulation) this work's with the same logic however this aims to be lighter as code as this will only emulate ps3 controller to add the only missing buttons. 
 ## PsVitaCustomController
 ### WORKING PROGRESS
 Esp 32 based ps vita controller using ESP-IDF
