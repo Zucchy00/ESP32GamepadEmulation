@@ -1,5 +1,5 @@
 # GamePad Emulator
-## WORKING PROGRESS
+## WORK IN PROGRESS
 Esp 32 based gamepad emulation using ESP-IDF
 ### Any contributions is appreciated
 ## Bugs: 
