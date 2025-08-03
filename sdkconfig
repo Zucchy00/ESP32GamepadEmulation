@@ -997,7 +997,7 @@ CONFIG_GPTIMER_OBJ_CACHE_SAFE=y
 #
 # ESP-Driver:LEDC Configurations
 #
-# CONFIG_LEDC_CTRL_FUNC_IN_IRAM is not set
+CONFIG_LEDC_CTRL_FUNC_IN_IRAM=y
 # end of ESP-Driver:LEDC Configurations
 
 #

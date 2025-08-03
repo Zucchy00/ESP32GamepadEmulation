@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
+#include <time.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -38,39 +39,56 @@ typedef struct
 
 static local_param_t s_bt_hid_param = {0};
 const unsigned char controllerReportMap[] = {
-    0x05, 0x01, // Usage Page (Generic Desktop)
-    0x09, 0x05, // Usage (Gamepad)
-    0xA1, 0x01, // Collection (Application)
-    0x05, 0x09, // Usage Page (Button)
-    0x19, 0x01, // Usage Minimum (Button 1)
-    0x29, 0x08, // Usage Maximum (Button 8)
-    0x15, 0x00, // Logical Minimum (0)
-    0x25, 0x01, // Logical Maximum (1)
-    0x95, 0x08, // Report Count (8)
-    0x75, 0x01, // Report Size (1)
-    0x81, 0x02, // Input (Data, Var, Abs)
-    0x05, 0x01, // Usage Page (Generic Desktop)
-    0x09, 0x39, // Usage (Hat switch)
-    0x15, 0x00, // Logical Minimum (0)
-    0x25, 0x07, // Logical Maximum (7)
-    0x35, 0x00, // Physical Minimum (0)
-    0x46, 0x3B, 0x01, // Physical Maximum (315)
-    0x65, 0x14, // Unit (Eng Rot:Angular Pos)
-    0x75, 0x04, // Report Size (4)
-    0x95, 0x01, // Report Count (1)
-    0x81, 0x02, // Input (Data, Var, Abs)
-    0x75, 0x04, // Report Size (4)
-    0x95, 0x01, // Report Count (1)
-    0x81, 0x03, // Input (Cnst, Var, Abs)
-    0x09, 0x30, // Usage (X)
-    0x09, 0x31, // Usage (Y)
-    0x15, 0x81, // Logical Minimum (-127)
-    0x25, 0x7F, // Logical Maximum (127)
-    0x75, 0x08, // Report Size (8)
-    0x95, 0x02, // Report Count (2)
-    0x81, 0x02, // Input (Data, Var, Abs)
-    0xC0        // End Collection
+    0x05, 0x01,       // Usage Page (Generic Desktop)
+    0x09, 0x05,       // Usage (Gamepad)
+    0xA1, 0x01,       // Collection (Application)
+
+    0x85, 0x01,       //   Report ID (1)
+
+    0x05, 0x09,       //   Usage Page (Button)
+    0x19, 0x01,       //   Usage Minimum (Button 1)
+    0x29, 0x0E,       //   Usage Maximum (Button 14)
+    0x15, 0x00,       //   Logical Minimum (0)
+    0x25, 0x01,       //   Logical Maximum (1)
+    0x95, 0x0E,       //   Report Count (14)
+    0x75, 0x01,       //   Report Size (1)
+    0x81, 0x02,       //   Input (Data,Var,Abs)
+
+    0x95, 0x02,       //   Report Count (2) - padding
+    0x75, 0x01,
+    0x81, 0x03,       //   Input (Cnst,Var,Abs)
+
+    0x05, 0x01,       //   Usage Page (Generic Desktop)
+    0x09, 0x39,       //   Usage (Hat switch)
+    0x15, 0x00,
+    0x25, 0x07,
+    0x35, 0x00,
+    0x46, 0x3B, 0x01, //   Physical Max (315)
+    0x65, 0x14,       //   Unit (Eng Rot:Angular Pos)
+    0x75, 0x04,
+    0x95, 0x01,
+    0x81, 0x02,       //   Input (Data,Var,Abs)
+
+    0x75, 0x04,
+    0x95, 0x01,
+    0x81, 0x03,       //   Padding
+
+    0x09, 0x30,       //   Usage (X)
+    0x09, 0x31,       //   Usage (Y)
+    0x09, 0x32,       //   Usage (Z)         -> rightX
+    0x09, 0x35,       //   Usage (Rz)        -> rightY
+    0x09, 0x33,       //   Usage (Rx)        -> left trigger
+    0x09, 0x34,       //   Usage (Ry)        -> right trigger
+
+    0x15, 0x00,
+    0x26, 0xFF, 0x00, //   Logical Max (255)
+    0x75, 0x08,
+    0x95, 0x06,
+    0x81, 0x02,       //   Input (Data,Var,Abs)
+
+    0xC0              // End Collection
 };
+
 
 static esp_hid_raw_report_map_t bt_report_maps[] = {
     {
@@ -91,62 +109,109 @@ static esp_hid_device_config_t bt_hid_config = {
 };
 
 // send the buttons, change in x, and change in y
-void send_gamepad_report(uint8_t report_id, uint8_t buttons, uint8_t x_axis, uint8_t y_axis)
-{
-    // HID report buffer (size of 4 bytes)
-    uint8_t buffer[4] = {0};  
+void send_gamepad_report(
+    uint16_t buttons,
+    uint8_t hat,
+    uint8_t lx, uint8_t ly,
+    uint8_t rx, uint8_t ry,
+    uint8_t l2, uint8_t r2
+) {
+    uint8_t report[9] = {0};
 
-    // Assign values to the report
-    buffer[0] = report_id;       // Report ID (e.g., 1 for gamepad report)
-    buffer[1] = buttons;         // Buttons pressed (bitmask)
-    buffer[2] = x_axis;          // X-axis position (0-255)
-    buffer[3] = y_axis;          // Y-axis position (0-255)
+    report[0] = 0x01;                // Report ID
+    report[1] = buttons & 0xFF;      // Buttons 0-7
+    report[2] = (buttons >> 8) & 0x3F; // Buttons 8-13 (6 bits), upper 2 bits = 0
+    report[3] = hat & 0x0F;          // D-pad (0-7), 0x08 = neutral
+    report[4] = lx;                  // Left Stick X
+    report[5] = ly;                  // Left Stick Y
+    report[6] = rx;                  // Right Stick X
+    report[7] = ry;                  // Right Stick Y
+    report[8] = l2;                  // Left Trigger
+    report[9] = r2;                  // Right Trigger
 
-    // Send the report
-    esp_hidd_dev_input_set(s_bt_hid_param.hid_dev, 0, 0, buffer, sizeof(buffer));
+    esp_hidd_dev_input_set(s_bt_hid_param.hid_dev, 0, 0x01, report, sizeof(report));
 }
+
 
 void bt_hid_demo_task(void *pvParameters)
 {
-    static const char* help_string = "########################################################################\n"\
-    "BT HID gamepad demo usage:\n"\
-    "This demo will periodically send gamepad reports without user input.\n"\
-    "########################################################################\n";
+    static const char* help_string =
+        "########################################################################\n"
+        "BT HID PS4-style gamepad demo:\n"
+        "This demo periodically sends gamepad reports using all controls.\n"
+        "########################################################################\n";
     printf("%s\n", help_string);
 
-    uint8_t buttons = 0; // Initial state of buttons
-    uint8_t x_axis = 128; // Centered joystick X position
-    uint8_t y_axis = 128; // Centered joystick Y position
+    uint16_t buttons = 0;
+    uint8_t hat = 0x08;  // Neutral (no D-pad direction)
+    uint8_t lx = 128;    // Left stick center
+    uint8_t ly = 128;
+    uint8_t rx = 128;    // Right stick center
+    uint8_t ry = 128;
+    uint8_t l2 = 0;      // Trigger pressure
+    uint8_t r2 = 0;
 
     while (1) {
-        // Simulate a button press and release
-        buttons = 0b00000001; // Example button press (e.g., button 1)
-        send_gamepad_report(0x01, buttons, x_axis, y_axis);
-        vTaskDelay(100 / portTICK_PERIOD_MS); // Simulate button press duration
-
-        buttons = 0b00000000; // Release button
-        send_gamepad_report(0x01, buttons, x_axis, y_axis);
-        vTaskDelay(100 / portTICK_PERIOD_MS);
-
-        // Simulate joystick movements (left, right, up, down)
-        x_axis = 64; // Joystick left
-        send_gamepad_report(0x01, 0b00000000, x_axis, y_axis);
-        vTaskDelay(100 / portTICK_PERIOD_MS);
-
-        x_axis = 192; // Joystick right
-        send_gamepad_report(0x01, 0b00000000, x_axis, y_axis);
-        vTaskDelay(100 / portTICK_PERIOD_MS);
-
-        y_axis = 64; // Joystick up
-        send_gamepad_report(0x01, 0b00000000, x_axis, y_axis);
-        vTaskDelay(100 / portTICK_PERIOD_MS);
-
-        y_axis = 192; // Joystick down
-        send_gamepad_report(0x01, 0b00000000, x_axis, y_axis);
-        vTaskDelay(100 / portTICK_PERIOD_MS);
-
-        // Delay for the next cycle
+        // Press X (b0)
+        buttons = 0b0000000000000001;
+        send_gamepad_report(buttons, hat, lx, ly, rx, ry, l2, r2);
         vTaskDelay(200 / portTICK_PERIOD_MS);
+
+        // Press Circle (b1)
+        buttons = 0b0000000000000010;
+        send_gamepad_report(buttons, hat, lx, ly, rx, ry, l2, r2);
+        vTaskDelay(200 / portTICK_PERIOD_MS);
+
+        // Press Triangle (b3)
+        buttons = 0b0000000000001000;
+        send_gamepad_report(buttons, hat, lx, ly, rx, ry, l2, r2);
+        vTaskDelay(200 / portTICK_PERIOD_MS);
+
+        // Press R1 (b5) + R2 full (analog)
+        buttons = 0b0000000000100000;
+        r2 = 255;
+        send_gamepad_report(buttons, hat, lx, ly, rx, ry, l2, r2);
+        vTaskDelay(200 / portTICK_PERIOD_MS);
+
+        // Simulate D-pad Up (hat = 0)
+        buttons = 0;
+        hat = 0x00;
+        send_gamepad_report(buttons, hat, lx, ly, rx, ry, l2, r2);
+        vTaskDelay(200 / portTICK_PERIOD_MS);
+
+        // Simulate D-pad Down (hat = 4)
+        hat = 0x04;
+        send_gamepad_report(buttons, hat, lx, ly, rx, ry, l2, r2);
+        vTaskDelay(200 / portTICK_PERIOD_MS);
+
+        // Move left stick left → right
+        hat = 0x08; // Neutral
+        lx = 0;     // Far left
+        send_gamepad_report(buttons, hat, lx, ly, rx, ry, l2, r2);
+        vTaskDelay(150 / portTICK_PERIOD_MS);
+
+        lx = 255;   // Far right
+        send_gamepad_report(buttons, hat, lx, ly, rx, ry, l2, r2);
+        vTaskDelay(150 / portTICK_PERIOD_MS);
+
+        // Move right stick up → down
+        rx = 128;
+        ry = 0;     // Up
+        send_gamepad_report(buttons, hat, lx, ly, rx, ry, l2, r2);
+        vTaskDelay(150 / portTICK_PERIOD_MS);
+
+        ry = 255;   // Down
+        send_gamepad_report(buttons, hat, lx, ly, rx, ry, l2, r2);
+        vTaskDelay(150 / portTICK_PERIOD_MS);
+
+        // Reset everything
+        buttons = 0;
+        hat = 0x08;
+        lx = ly = rx = ry = 128;
+        l2 = r2 = 0;
+        send_gamepad_report(buttons, hat, lx, ly, rx, ry, l2, r2);
+
+        vTaskDelay(400 / portTICK_PERIOD_MS);
     }
 }
 
@@ -265,9 +330,29 @@ static void esp_sdp_cb(esp_sdp_cb_event_t event, esp_sdp_cb_param_t *param)
     }
 }
 
+static const char *TAGSERIAL = "SerialNumber";
+
+// Function to generate a casual serial number
+static void generate_serial_number(char *serial_number, size_t len) {
+    const char charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    srand(time(NULL));
+    for (int i = 0; i < len - 1; i++) {
+        serial_number[i] = charset[rand() % (sizeof(charset) - 1)];
+    }
+    serial_number[len - 1] = '\0';
+    ESP_LOGI(TAGSERIAL, "Generated Serial Number: %s", serial_number);
+}
+
 
 void app_main(void)
 {
+    char serial_number[13];
+
+    // Generate the serial number during runtime
+    generate_serial_number(serial_number, sizeof(serial_number));
+
+    // Set the serial number in the configuration
+    bt_hid_config.serial_number = serial_number;
     esp_err_t ret;
 #if HID_DEV_MODE == HIDD_IDLE_MODE
     ESP_LOGE(TAG, "Please turn on BT HID device or BLE!");
