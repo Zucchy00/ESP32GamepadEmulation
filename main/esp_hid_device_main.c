@@ -384,18 +384,19 @@ static esp_hid_device_config_t bt_hid_config = {
 static void send_hid_input(uint8_t *data, size_t len) {
     if (g_hid_connected && s_bt_hid_param.hid_dev &&
         esp_hidd_dev_connected(s_bt_hid_param.hid_dev)) {
-        esp_err_t err = esp_hidd_dev_input_set(
-            s_bt_hid_param.hid_dev,
-            0,
-            data[1],   // Report ID (0x01 or 0x11)
-            &data[2],  // Skip 0xA1 + ID (BT HID does not need prefix)
-            len - 2
+        esp_err_t err = esp_hidd_dev_input_set( 
+            s_bt_hid_param.hid_dev, 
+            0, 
+            data[1], // Report ID (0x01 or 0x11) 
+            &data[2], // Skip 0xA1 + ID (BT HID does not need prefix) 
+            len - 2 
         );
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "BT HID send failed: %s", esp_err_to_name(err));
         }
     }
 }
+
 
 
 size_t send_gamepad_report(void) {
@@ -413,12 +414,15 @@ size_t send_gamepad_report(void) {
         report[4] = _axisPosition[2]; // RX
         report[5] = _axisPosition[3]; // RY
 
+        // Hat + first 4 buttons
         report[6] = _hatDirection;
         BIT_WRITE(report[6], 7, _buttonState[0]); // Triangle
         BIT_WRITE(report[6], 6, _buttonState[1]); // Circle
         BIT_WRITE(report[6], 5, _buttonState[2]); // Cross
         BIT_WRITE(report[6], 4, _buttonState[3]); // Square
 
+        // Next buttons
+        report[7] = 0;
         BIT_WRITE(report[7], 0, _buttonState[4]);  // L1
         BIT_WRITE(report[7], 1, _buttonState[5]);  // R1
         BIT_WRITE(report[7], 2, _buttonState[6]);  // L2
@@ -428,16 +432,11 @@ size_t send_gamepad_report(void) {
         BIT_WRITE(report[7], 6, _buttonState[10]); // L3
         BIT_WRITE(report[7], 7, _buttonState[11]); // R3
 
-        report[8]  = (_count & 0x3F) << 2;
-        BIT_WRITE(report[8], 0, _buttonState[12]); // PS
-        BIT_WRITE(report[8], 1, _buttonState[13]); // Touchpad click
+        // Triggers
+        report[8] = _triggerPosition[0]; // L2 analog
+        report[9] = _triggerPosition[1]; // R2 analog
 
-        report[9]  = _triggerPosition[0];
-        report[10] = _triggerPosition[1];
-
-        len = 11; // short report length
-        send_hid_input(report, len);
-
+        len = 10; // total report length
     } else if (current_report_id == 0x11) {
         // === Extended DS4 report ===
         report[2] = 0xC0; // Constant
@@ -478,8 +477,9 @@ size_t send_gamepad_report(void) {
         report[15] = 0x0A; // Battery example
 
         len = 63; // extended DS4 BT length
-        send_hid_input(report, len);
     }
+
+    send_hid_input(report, len);
 
     _count++;
     return len;
@@ -499,7 +499,7 @@ void bt_hid_demo_task(void *pvParameters)
         if (len > 63) len = 63;
 
         // Slower rate to avoid flooding
-        vTaskDelay(200 / portTICK_PERIOD_MS);
+        vTaskDelay(300 / portTICK_PERIOD_MS);
     }
 }
 
