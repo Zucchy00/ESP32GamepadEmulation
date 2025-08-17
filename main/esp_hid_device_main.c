@@ -10,6 +10,7 @@
 #include <inttypes.h>
 #include <time.h>
 #include "driver/ledc.h"
+#include "esp_timer.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -28,7 +29,24 @@
 #include "esp_hidd.h"
 #include "esp_hid_gap.h"
 
+#define BIT_WRITE(byte, bit, val) \
+    ((val) ? ((byte) |=  (1 << (bit))) : ((byte) &= ~(1 << (bit))))
+
 static const char *TAG = "HID_DEV_DEMO";
+
+int _count = 0;
+/* initialize all axes to center (127) */
+uint8_t _axisPosition[4] = {127, 127, 127, 127};
+/* buttons as bools (all false) */
+bool _buttonState[14] = {false};
+/* triggers */
+uint8_t _triggerPosition[2] = {0, 0};
+int _hatDirection = 8;
+
+static uint8_t current_report_id = 0x01;
+
+/* connection flag — set in event callback */
+static volatile bool g_hid_connected = false;
 
 // Define LED pins and LEDC channels
 #define RED_LED_PIN     25
@@ -110,236 +128,236 @@ typedef struct
 
 static local_param_t s_bt_hid_param = {0};
 const unsigned char controllerReportMap[] = {
-    0x05, 	0x01, 	 	 //Usage Page (Generic Desktop Controls) 	
-    0x09, 	0x05, 	 	 //Usage (Game Pad) 	CA – A manual control or cursor device. A game pad minimally consists of a thumbactivated rocker switch that controls two axes (X and Y) and has four buttons. The rocker switch consists of four contact closures for up, down, right, and left.
-    0xA1, 	0x01, 	 	 //Collection (Application) 	Start
-    0x85, 	0x01, 	 	 //Report ID (1) 	Used by the FW to determine what data has been send or need to be transmitted
-    0x09, 	0x30, 	 	 //Usage (X) 	DV – A linear translation in the X direction. Report values should increase as the control’s position is moved from left to right. (for sticks)
-    0x09, 	0x31, 	 	 //Usage (Y) 	DV – (Y direction values should increase from far to near)
-    0x09, 	0x32, 	 	 //Usage (Z) 	DV – (Z direction values should increase from high to low)
-    0x09, 	0x35, 	 	 //Usage (Rz) 	DV – A rotation about the Z axis. Angular position report values follow the righthand rule.
-    0x15, 	0x00, 	 	 //Logical Minimum (0) 	Value for sticks
-    0x26, 	0xFF, 	0x00,// 	Logical Maximum (255) 	Value
-    0x75, 	0x08, 	 	 //Report Size (8) 	8 bits per variable
-    0x95, 	0x04, 	 	 //Report Count (4) 	4 variables
-    0x81, 	0x02, 	 	 //Input (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position) 	send variables (bytes 01 to 04)
-    0x09, 	0x39, 	 	 //Usage (Hat switch) 	DV – A specialized mechanical configuration of switches generating a variable value with a null state. The switches are arranged around a springloaded knob. When the knob is tilted in the direction of a switch, its contacts are closed. A typical example is four switches that are capable of generating information about four possible directions in which the knob can be tilted. Intermediate positions can also be decoded if the hardware allows two switches to be reported simultaneously. (for Dpad)
-    0x15, 	0x00, 	 	 //Logical Minimum (0) 	Value (0=N)
-    0x25, 	0x07, 	 	 //Logical Maximum (7) 	Value (7=NW)
-    0x35, 	0x00, 	 	 //Physical Minimum (0) 	
-    0x46, 	0x3B, 	0x01,// 	Physical Maximum (315) 	
-    0x65, 	0x14, 	 	 //Unit (System: English Rotation, Length: Centimeter) 	
-    0x75, 	0x04, 	 	 //Report Size (4) 	(4 bits)
-    0x95, 	0x01, 	 	 //Report Count (1) 	1 variable (Dpad)
-    0x81, 	0x42, 	 	 //Input (Data,Var,Abs,No Wrap,Linear,Preferred State,Null State) 	send (byte 05 low nibble lsb)
-    0x65, 	0x00, 	 	 //Unit (None) 	
-    0x05, 	0x09, 	 	 //Usage Page (Button) 	face buttons
-    0x19, 	0x01, 	 	 //Usage Minimum (0x01) 	first button
-    0x29, 	0x0E, 	 	 //Usage Maximum (0x0E) 	last button (14)
-    0x15, 	0x00, 	 	 //Logical Minimum (0) 	Value for each button (status: 0 or 1)
-    0x25, 	0x01, 	 	 //Logical Maximum (1) 	
-    0x75, 	0x01, 	 	 //Report Size (1) 	1 bit per button
-    0x95, 	0x0E, 	 	 //Report Count (14) 	14 bits
-    0x81, 	0x02, 	 	 //Input (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position) 	send (byte 05 high nibble msb, 8 bits of byte 06 and binary bit 0 & 1 of byte 07)
-    0x06, 	0x00, 	0xFF,// 	Usage Page (Vendor Defined 0xFF00) 	
-    0x09, 	0x20, 	 	 //Usage (0x20) 	Counter
-    0x75, 	0x06, 	 	 //Report Size (6) 	6 bits
-    0x95, 	0x01, 	 	 //Report Count (1) 	
-    0x15, 	0x00, 	 	 //Logical Minimum (0) 	
-    0x25, 	0x7F, 	 	 //Logical Maximum (127) 	Note: REPORT_SIZE (6) is too small for LOGICAL_MAXIMUM (127) which needs 7 bits
-    0x81, 	0x02, 	 	 //Input (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position) 	send (byte 07: msb 6 bits)
-    0x05, 	0x01, 	 	 //Usage Page (Generic Desktop Controls) 	Shoulderpads Trigger
-    0x09, 	0x33, 	 	 //Usage (Rx) 	DV – A rotation about the X axis. Angular position report values follow the right hand rule (L2 trigger)
-    0x09, 	0x34, 	 	 //Usage (Ry) 	DV – A rotation about the Z axis. Angular position report values follow the right hand rule (R2 trigger)
-    0x15, 	0x00, 	 	 //Logical Minimum (0) 	
-    0x26, 	0xFF, 	0x00,// 	Logical Maximum (255) 	
-    0x75, 	0x08, 	 	 //Report Size (8) 	8 bits
-    0x95, 	0x02, 	 	 //Report Count (2) 	2 bytes
-    0x81, 	0x02, 	 	 //Input (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position) 	send bytes 08 & 09
-    0x06, 	0x00, 	0xFF,// 	Usage Page (Vendor Defined 0xFF00) 	
-    0x09, 	0x21, 	 	 //Usage (0x21) 	
-    0x95, 	0x36, 	 	 //Report Count (54) 	
-    0x81, 	0x02, 	 	 //Input (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position) 	
-    0x85, 	0x05, 	 	 //Report ID (5) 	
-    0x09, 	0x22, 	 	 //Usage (0x22) 	
-    0x95, 	0x1F, 	 	 //Report Count (31) 	
-    0x91, 	0x02, 	 	 //Output (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0x04, 	 	 //Report ID (4) 	
-    0x09, 	0x23, 	 	 //Usage (0x23) 	
-    0x95, 	0x24, 	 	 //Report Count (36) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	DV – declared in an Input report and is used as a notification to the host that the contents of a specific Feature report has changed
-    0x85, 	0x02, 	 	 //Report ID (2) 	
-    0x09, 	0x24, 	 	 //Usage (0x24) 	
-    0x95, 	0x24, 	 	 //Report Count (36) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0x08, 	 	 //Report ID (8) 	
-    0x09, 	0x25, 	 	 //Usage (0x25) 	
-    0x95, 	0x03, 	 	 //Report Count (3) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0x10, 	 	 //Report ID (16) 	
-    0x09, 	0x26, 	 	 //Usage (0x26) 	
-    0x95, 	0x04, 	 	 //Report Count (4) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0x11, 	 	 //Report ID (17) 	
-    0x09, 	0x27, 	 	 //Usage (0x27) 	
-    0x95, 	0x02, 	 	 //Report Count (2) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0x12, 	 	 //Report ID (18) 	
-    0x06, 	0x02, 	0xFF,// 	Usage Page (Vendor Defined 0xFF02) 	
-    0x09, 	0x21, 	 	 //Usage (0x21) 	
-    0x95, 	0x0F, 	 	 //Report Count (15) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0x13, 	 	 //Report ID (19) 	
-    0x09, 	0x22, 	 	 //Usage (0x22) 	
-    0x95, 	0x16, 	 	 //Report Count (22) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0x14, 	 	 //Report ID (20) 	
-    0x06, 	0x05, 	0xFF,// 	Usage Page (Vendor Defined 0xFF05) 	
-    0x09, 	0x20, 	 	 //Usage (0x20) 	
-    0x95, 	0x10, 	 	 //Report Count (16) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0x15, 	 	 //Report ID (21) 	
-    0x09, 	0x21, 	 	 //Usage (0x21) 	
-    0x95, 	0x2C, 	 	 //Report Count (44) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x06, 	0x80, 	0xFF,// 	Usage Page (Vendor Defined 0xFF80) 	
-    0x85, 	0x80, 	 	 //Report ID (128) 	
-    0x09, 	0x20, 	 	 //Usage (0x20) 	
-    0x95, 	0x06, 	 	 //Report Count (6) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0x81, 	 	 //Report ID (129) 	
-    0x09, 	0x21, 	 	 //Usage (0x21) 	
-    0x95, 	0x06, 	 	 //Report Count (6) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0x82, 	 	 //Report ID (130) 	
-    0x09, 	0x22, 	 	 //Usage (0x22) 	
-    0x95, 	0x05, 	 	 //Report Count (5) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0x83, 	 	 //Report ID (131) 	
-    0x09, 	0x23, 	 	 //Usage (0x23) 	
-    0x95, 	0x01, 	 	 //Report Count (1) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0x84, 	 	 //Report ID (132) 	
-    0x09, 	0x24, 	 	 //Usage (0x24) 	
-    0x95, 	0x04, 	 	 //Report Count (4) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0x85, 	 	 //Report ID (133) 	
-    0x09, 	0x25, 	 	 //Usage (0x25) 	
-    0x95, 	0x06, 	 	 //Report Count (6) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0x86, 	 	 //Report ID (134) 	
-    0x09, 	0x26, 	 	 //Usage (0x26) 	
-    0x95, 	0x06, 	 	 //Report Count (6) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0x87, 	 	 //Report ID (135) 	
-    0x09, 	0x27, 	 	 //Usage (0x27) 	
-    0x95, 	0x23, 	 	 //Report Count (35) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0x88, 	 	 //Report ID (136) 	
-    0x09, 	0x28, 	 	 //Usage (0x28) 	
-    0x95, 	0x22, 	 	 //Report Count (34) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0x89, 	 	 //Report ID (137) 	
-    0x09, 	0x29, 	 	 //Usage (0x29) 	
-    0x95, 	0x02, 	 	 //Report Count (2) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0x90, 	 	 //Report ID (144) 	
-    0x09, 	0x30, 	 	 //Usage (X) 	DV – A linear translation in the X direction. Report values should increase as the control’s position is moved from left to right.
-    0x95, 	0x05, 	 	 //Report Count (5) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0x91, 	 	 //Report ID (145) 	
-    0x09, 	0x31, 	 	 //Usage (Y) 	DV – A linear translation in the Y direction. Report values should increase as the control’s position is moved from far to near.
-    0x95, 	0x03, 	 	 //Report Count (3) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0x92, 	 	 //Report ID (146) 	
-    0x09, 	0x32, 	 	 //Usage (Z) 	DV – A linear translation in the Z direction. Report values should increase as the control’s position is moved from high to low (Z).
-    0x95, 	0x03, 	 	 //Report Count (3) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0x93, 	 	 //Report ID (147) 	
-    0x09, 	0x33, 	 	 //Usage (Rx) 	DV – A rotation about the X axis. Angular position report values follow the righthand rule.
-    0x95, 	0x0C, 	 	 //Report Count (12) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0xA0, 	 	 //Report ID (160) 	
-    0x09, 	0x40, 	 	 //Usage (Vx) 	DV – A vector in the X direction. Report values should increase as the vector increases in the positive X direction (from left to right). Negative values represent vectors in the negative X direction.
-    0x95, 	0x06, 	 	 //Report Count (6) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0xA1, 	 	 //Report ID (161) 	
-    0x09, 	0x41, 	 	 //Usage (Vy) 	DV – A vector in the Y direction. Report values should increase as the vector increases in the positive Y direction (from far to near). Negative values represent vectors in the negative Y direction.
-    0x95, 	0x01, 	 	 //Report Count (1) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0xA2, 	 	 //Report ID (162) 	
-    0x09, 	0x42, 	 	 //Usage (Vz) 	DV – (Z direction from high to low)
-    0x95, 	0x01, 	 	 //Report Count (1) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0xA3, 	 	 //Report ID (163) 	
-    0x09, 	0x43, 	 	 //Usage (Vbrx) 	DV – A vector in the X direction relative to the body of an object. Report values should increase as the vector increases in the positive X direction (forward). Negative values represent vectors in the negative X direction. X is the “forward” axis for an object
-    0x95, 	0x30, 	 	 //Report Count (48) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0xA4, 	 	 //Report ID (164) 	
-    0x09, 	0x44, 	 	 //Usage (Vbry) 	DV – (Y direction to the right from an observer facing forward on the object)
-    0x95, 	0x0D, 	 	 //Report Count (13) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0xA5, 	 	 //Report ID (165) 	
-    0x09, 	0x45, 	 	 //Usage (Vbrz) 	DV – A vector in the Z direction relative to the body of an object. Report values should increase as the vector increases in the positive Z direction (down from an observer facing forward on the object). Negative values represent vectors in the negative Z direction.
-    0x95, 	0x15, 	 	 //Report Count (21) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0xA6, 	 	 //Report ID (166) 	
-    0x09, 	0x46, 	 	 //Usage (Vno) 	DV– A non oriented vector or value. The units define a physical measurement not related to a specific axis or orientation. An example would be pressure or temperature.
-    0x95, 	0x15, 	 	 //Report Count (21) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0xF0, 	 	 //Report ID (240) 	
-    0x09, 	0x47, 	 	 //Usage (Feature Notification) 	
-    0x95, 	0x3F, 	 	 //Report Count (63) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0xF1, 	 	 //Report ID (241) 	
-    0x09, 	0x48, 	 	 //Usage (Resolution Multiplier) 	DV– Defines a (if a device has the capability to vary the resolution of one or more of its controls) Resolution Multiplier for a (all) Control:
-    0x95, 	0x3F, 	 	 //Report Count (63) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0xF2, 	 	 //Report ID (242) 	
-    0x09, 	0x49, 	 	 //Usage (0x49) 	
-    0x95, 	0x0F, 	 	 //Report Count (15) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0xA7, 	 	 //Report ID (167) 	
-    0x09, 	0x4A, 	 	 //Usage (0x4A) 	
-    0x95, 	0x01, 	 	 //Report Count (1) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0xA8, 	 	 //Report ID (168) 	
-    0x09, 	0x4B, 	 	 //Usage (0x4B) 	
-    0x95, 	0x01, 	 	 //Report Count (1) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0xA9, 	 	 //Report ID (169) 	
-    0x09, 	0x4C, 	 	 //Usage (0x4C) 	
-    0x95, 	0x08, 	 	 //Report Count (8) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0xAA, 	 	 //Report ID (170) 	
-    0x09, 	0x4E, 	 	 //Usage (0x4E) 	
-    0x95, 	0x01, 	 	 //Report Count (1) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0xAB, 	 	 //Report ID (171) 	
-    0x09, 	0x4F, 	 	 //Usage (0x4F) 	
-    0x95, 	0x39, 	 	 //Report Count (57) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0xAC, 	 	 //Report ID (172) 	
-    0x09, 	0x50, 	 	 //Usage (0x50) 	
-    0x95, 	0x39, 	 	 //Report Count (57) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0xAD, 	 	 //Report ID (173) 	
-    0x09, 	0x51, 	 	 //Usage (0x51) 	
-    0x95, 	0x0B, 	 	 //Report Count (11) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0xAE, 	 	 //Report ID (174) 	
-    0x09, 	0x52, 	 	 //Usage (0x52) 	
-    0x95, 	0x01, 	 	 //Report Count (1) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0xAF, 	 	 //Report ID (175) 	
-    0x09, 	0x53, 	 	 //Usage (0x53) 	
-    0x95, 	0x02, 	 	 //Report Count (2) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0x85, 	0xB0, 	 	 //Report ID (176) 	
-    0x09, 	0x54, 	 	 //Usage (0x54) 	
-    0x95, 	0x3F, 	 	 //Report Count (63) 	
-    0xB1, 	0x02, 	 	 //Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Nonvolatile) 	
-    0xC0                 //Collection 	End 
+    0x05,0x01,
+    0x09,0x05,
+    0xA1,0x01,
+    0x85,0x01,
+    0x09,0x30,
+    0x09,0x31,
+    0x09,0x32,
+    0x09,0x35,
+    0x15,0x00,
+    0x26,0xFF,0x00,
+    0x75,0x08,
+    0x95,0x04,
+    0x81,0x02,
+    0x09,0x39,
+    0x15,0x00,
+    0x25,0x07,
+    0x35,0x00,
+    0x46,0x3B,0x01,
+    0x65,0x14,
+    0x75,0x04,
+    0x95,0x01,
+    0x81,0x42,
+    0x65,0x00,
+    0x05,0x09,
+    0x19,0x01,
+    0x29,0x0E,
+    0x15,0x00,
+    0x25,0x01,
+    0x75,0x01,
+    0x95,0x0E,
+    0x81,0x02,
+    0x06,0x00,0xFF,
+    0x09,0x20,
+    0x75,0x06,
+    0x95,0x01,
+    0x15,0x00,
+    0x25,0x7F,
+    0x81,0x02,
+    0x05,0x01,
+    0x09,0x33,
+    0x09,0x34,
+    0x15,0x00,
+    0x26,0xFF,0x00,
+    0x75,0x08,
+    0x95,0x02,
+    0x81,0x02,
+    0x06,0x00,0xFF,
+    0x09,0x21,
+    0x95,0x36,
+    0x81,0x02,
+    0x85,0x05,
+    0x09,0x22,
+    0x95,0x1F,
+    0x91,0x02,
+    0x85,0x04,
+    0x09,0x23,
+    0x95,0x24,
+    0xB1,0x02,
+    0x85,0x02,
+    0x09,0x24,
+    0x95,0x24,
+    0xB1,0x02,
+    0x85,0x08,
+    0x09,0x25,
+    0x95,0x03,
+    0xB1,0x02,
+    0x85,0x10,
+    0x09,0x26,
+    0x95,0x04,
+    0xB1,0x02,
+    0x85,0x11,
+    0x09,0x27,
+    0x95,0x02,
+    0xB1,0x02,
+    0x85,0x12,
+    0x06,0x02,0xFF,
+    0x09,0x21,
+    0x95,0x0F,
+    0xB1,0x02,
+    0x85,0x13,
+    0x09,0x22,
+    0x95,0x16,
+    0xB1,0x02,
+    0x85,0x14,
+    0x06,0x05,0xFF,
+    0x09,0x20,
+    0x95,0x10,
+    0xB1,0x02,
+    0x85,0x15,
+    0x09,0x21,
+    0x95,0x2C,
+    0xB1,0x02,
+    0x06,0x80,0xFF,
+    0x85,0x80,
+    0x09,0x20,
+    0x95,0x06,
+    0xB1,0x02,
+    0x85,0x81,
+    0x09,0x21,
+    0x95,0x06,
+    0xB1,0x02,
+    0x85,0x82,
+    0x09,0x22,
+    0x95,0x05,
+    0xB1,0x02,
+    0x85,0x83,
+    0x09,0x23,
+    0x95,0x01,
+    0xB1,0x02,
+    0x85,0x84,
+    0x09,0x24,
+    0x95,0x04,
+    0xB1,0x02,
+    0x85,0x85,
+    0x09,0x25,
+    0x95,0x06,
+    0xB1,0x02,
+    0x85,0x86,
+    0x09,0x26,
+    0x95,0x06,
+    0xB1,0x02,
+    0x85,0x87,
+    0x09,0x27,
+    0x95,0x23,
+    0xB1,0x02,
+    0x85,0x88,
+    0x09,0x28,
+    0x95,0x22,
+    0xB1,0x02,
+    0x85,0x89,
+    0x09,0x29,
+    0x95,0x02,
+    0xB1,0x02,
+    0x85,0x90,
+    0x09,0x30,
+    0x95,0x05,
+    0xB1,0x02,
+    0x85,0x91,
+    0x09,0x31,
+    0x95,0x03,
+    0xB1,0x02,
+    0x85,0x92,
+    0x09,0x32,
+    0x95,0x03,
+    0xB1,0x02,
+    0x85,0x93,
+    0x09,0x33,
+    0x95,0x0C,
+    0xB1,0x02,
+    0x85,0xA0,
+    0x09,0x40,
+    0x95,0x06,
+    0xB1,0x02,
+    0x85,0xA1,
+    0x09,0x41,
+    0x95,0x01,
+    0xB1,0x02,
+    0x85,0xA2,
+    0x09,0x42,
+    0x95,0x01,
+    0xB1,0x02,
+    0x85,0xA3,
+    0x09,0x43,
+    0x95,0x30,
+    0xB1,0x02,
+    0x85,0xA4,
+    0x09,0x44,
+    0x95,0x0D,
+    0xB1,0x02,
+    0x85,0xA5,
+    0x09,0x45,
+    0x95,0x15,
+    0xB1,0x02,
+    0x85,0xA6,
+    0x09,0x46,
+    0x95,0x15,
+    0xB1,0x02,
+    0x85,0xF0,
+    0x09,0x47,
+    0x95,0x3F,
+    0xB1,0x02,
+    0x85,0xF1,
+    0x09,0x48,
+    0x95,0x3F,
+    0xB1,0x02,
+    0x85,0xF2,
+    0x09,0x49,
+    0x95,0x0F,
+    0xB1,0x02,
+    0x85,0xA7,
+    0x09,0x4A,
+    0x95,0x01,
+    0xB1,0x02,
+    0x85,0xA8,
+    0x09,0x4B,
+    0x95,0x01,
+    0xB1,0x02,
+    0x85,0xA9,
+    0x09,0x4C,
+    0x95,0x08,
+    0xB1,0x02,
+    0x85,0xAA,
+    0x09,0x4E,
+    0x95,0x01,
+    0xB1,0x02,
+    0x85,0xAB,
+    0x09,0x4F,
+    0x95,0x39,
+    0xB1,0x02,
+    0x85,0xAC,
+    0x09,0x50,
+    0x95,0x39,
+    0xB1,0x02,
+    0x85,0xAD,
+    0x09,0x51,
+    0x95,0x0B,
+    0xB1,0x02,
+    0x85,0xAE,
+    0x09,0x52,
+    0x95,0x01,
+    0xB1,0x02,
+    0x85,0xAF,
+    0x09,0x53,
+    0x95,0x02,
+    0xB1,0x02,
+    0x85,0xB0,
+    0x09,0x54,
+    0x95,0x3F,
+    0xB1,0x02,
+    0xC0
 };
 
 
@@ -363,35 +381,109 @@ static esp_hid_device_config_t bt_hid_config = {
     .report_maps_len    = 1
 };
 
-// send the buttons, change in x, and change in y
-void send_gamepad_report(
-    uint16_t buttons,
-    uint8_t hat,
-    uint8_t lx, uint8_t ly,
-    uint8_t rx, uint8_t ry,
-    uint8_t l2, uint8_t r2
-) {
-    uint8_t report[10] = {0};
-
-    report[0] = 0x01;                // Report ID
-    report[1] = buttons & 0xFF;      // Buttons 0–7
-    report[2] = (buttons >> 8) & 0x3F; // Buttons 8–13 (6 bits), 2 bits padding
-    report[3] = hat & 0x0F;          // D-pad (4 bits), neutral = 0x08
-    report[4] = lx;                  // Left Stick X
-    report[5] = ly;                  // Left Stick Y
-    report[6] = rx;                  // Right Stick X
-    report[7] = ry;                  // Right Stick Y
-    report[8] = l2;                  // Left Trigger (Rx)
-    report[9] = r2;                  // Right Trigger (Ry)
-
-    if (s_bt_hid_param.hid_dev && esp_hidd_dev_connected(s_bt_hid_param.hid_dev)) {
-        esp_hidd_dev_input_set(s_bt_hid_param.hid_dev, 0, 0x01, report, sizeof(report));
-    } else {
-        ESP_LOGW(TAG, "HID device not connected. Skipping report.");
+static void send_hid_input(uint8_t *data, size_t len) {
+    if (g_hid_connected && s_bt_hid_param.hid_dev &&
+        esp_hidd_dev_connected(s_bt_hid_param.hid_dev)) {
+        esp_err_t err = esp_hidd_dev_input_set(
+            s_bt_hid_param.hid_dev,
+            0,
+            data[1],   // Report ID (0x01 or 0x11)
+            &data[2],  // Skip 0xA1 + ID (BT HID does not need prefix)
+            len - 2
+        );
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "BT HID send failed: %s", esp_err_to_name(err));
+        }
     }
 }
 
 
+size_t send_gamepad_report(void) {
+    uint8_t report[64] = {0}; // 64 max over BT HID
+    size_t len = 0;
+
+    // Report header
+    report[0] = 0xA1;              // DATA | INPUT
+    report[1] = current_report_id; // 0x01 (short) or 0x11 (extended)
+
+    if (current_report_id == 0x01) {
+        // === Short DS4 report ===
+        report[2] = _axisPosition[0]; // LX
+        report[3] = _axisPosition[1]; // LY
+        report[4] = _axisPosition[2]; // RX
+        report[5] = _axisPosition[3]; // RY
+
+        report[6] = _hatDirection;
+        BIT_WRITE(report[6], 7, _buttonState[0]); // Triangle
+        BIT_WRITE(report[6], 6, _buttonState[1]); // Circle
+        BIT_WRITE(report[6], 5, _buttonState[2]); // Cross
+        BIT_WRITE(report[6], 4, _buttonState[3]); // Square
+
+        BIT_WRITE(report[7], 0, _buttonState[4]);  // L1
+        BIT_WRITE(report[7], 1, _buttonState[5]);  // R1
+        BIT_WRITE(report[7], 2, _buttonState[6]);  // L2
+        BIT_WRITE(report[7], 3, _buttonState[7]);  // R2
+        BIT_WRITE(report[7], 4, _buttonState[8]);  // Share
+        BIT_WRITE(report[7], 5, _buttonState[9]);  // Options
+        BIT_WRITE(report[7], 6, _buttonState[10]); // L3
+        BIT_WRITE(report[7], 7, _buttonState[11]); // R3
+
+        report[8]  = (_count & 0x3F) << 2;
+        BIT_WRITE(report[8], 0, _buttonState[12]); // PS
+        BIT_WRITE(report[8], 1, _buttonState[13]); // Touchpad click
+
+        report[9]  = _triggerPosition[0];
+        report[10] = _triggerPosition[1];
+
+        len = 11; // short report length
+        send_hid_input(report, len);
+
+    } else if (current_report_id == 0x11) {
+        // === Extended DS4 report ===
+        report[2] = 0xC0; // Constant
+        report[3] = 0x00; // Report ID (USB style)
+
+        report[4] = _axisPosition[0]; // LX
+        report[5] = _axisPosition[1]; // LY
+        report[6] = _axisPosition[2]; // RX
+        report[7] = _axisPosition[3]; // RY
+
+        report[8] = _hatDirection;
+        BIT_WRITE(report[8], 7, _buttonState[0]); // Triangle
+        BIT_WRITE(report[8], 6, _buttonState[1]); // Circle
+        BIT_WRITE(report[8], 5, _buttonState[2]); // Cross
+        BIT_WRITE(report[8], 4, _buttonState[3]); // Square
+
+        report[9] = 0;
+        BIT_WRITE(report[9], 0, _buttonState[4]);  // L1
+        BIT_WRITE(report[9], 1, _buttonState[5]);  // R1
+        BIT_WRITE(report[9], 2, _buttonState[6]);  // L2
+        BIT_WRITE(report[9], 3, _buttonState[7]);  // R2
+        BIT_WRITE(report[9], 4, _buttonState[8]);  // Share
+        BIT_WRITE(report[9], 5, _buttonState[9]);  // Options
+        BIT_WRITE(report[9], 6, _buttonState[10]); // L3
+        BIT_WRITE(report[9], 7, _buttonState[11]); // R3
+
+        report[10] = (_count & 0x3F) << 2;
+        BIT_WRITE(report[10], 0, _buttonState[12]); // PS
+        BIT_WRITE(report[10], 1, _buttonState[13]); // Touchpad click
+
+        report[11] = _triggerPosition[0];
+        report[12] = _triggerPosition[1];
+
+        uint16_t t = (uint16_t)(esp_timer_get_time() / 1000ULL);
+        report[13] = t & 0xFF;
+        report[14] = t >> 8;
+
+        report[15] = 0x0A; // Battery example
+
+        len = 63; // extended DS4 BT length
+        send_hid_input(report, len);
+    }
+
+    _count++;
+    return len;
+}
 
 void bt_hid_demo_task(void *pvParameters)
 {
@@ -402,83 +494,26 @@ void bt_hid_demo_task(void *pvParameters)
         "########################################################################\n";
     printf("%s\n", help_string);
 
-    uint16_t buttons = 0;
-    uint8_t hat = 0x08;  // Neutral (no D-pad direction)
-    uint8_t lx = 128;    // Left stick center
-    uint8_t ly = 128;
-    uint8_t rx = 128;    // Right stick center
-    uint8_t ry = 128;
-    uint8_t l2 = 0;      // Trigger pressure
-    uint8_t r2 = 0;
+    while (esp_hidd_dev_connected(s_bt_hid_param.hid_dev)) {
+        size_t len = send_gamepad_report();
+        if (len > 63) len = 63;
 
-    while (1) {
-        // Press X (b0)
-        buttons = 0b0000000000000001;
-        send_gamepad_report(buttons, hat, lx, ly, rx, ry, l2, r2);
+        // Slower rate to avoid flooding
         vTaskDelay(200 / portTICK_PERIOD_MS);
-
-        // Press Circle (b1)
-        buttons = 0b0000000000000010;
-        send_gamepad_report(buttons, hat, lx, ly, rx, ry, l2, r2);
-        vTaskDelay(200 / portTICK_PERIOD_MS);
-
-        // Press Triangle (b3)
-        buttons = 0b0000000000001000;
-        send_gamepad_report(buttons, hat, lx, ly, rx, ry, l2, r2);
-        vTaskDelay(200 / portTICK_PERIOD_MS);
-
-        // Press R1 (b5) + R2 full (analog)
-        buttons = 0b0000000000100000;
-        r2 = 255;
-        send_gamepad_report(buttons, hat, lx, ly, rx, ry, l2, r2);
-        vTaskDelay(200 / portTICK_PERIOD_MS);
-
-        // Simulate D-pad Up (hat = 0)
-        buttons = 0;
-        hat = 0x00;
-        send_gamepad_report(buttons, hat, lx, ly, rx, ry, l2, r2);
-        vTaskDelay(200 / portTICK_PERIOD_MS);
-
-        // Simulate D-pad Down (hat = 4)
-        hat = 0x04;
-        send_gamepad_report(buttons, hat, lx, ly, rx, ry, l2, r2);
-        vTaskDelay(200 / portTICK_PERIOD_MS);
-
-        // Move left stick left → right
-        hat = 0x08; // Neutral
-        lx = 0;     // Far left
-        send_gamepad_report(buttons, hat, lx, ly, rx, ry, l2, r2);
-        vTaskDelay(150 / portTICK_PERIOD_MS);
-
-        lx = 255;   // Far right
-        send_gamepad_report(buttons, hat, lx, ly, rx, ry, l2, r2);
-        vTaskDelay(150 / portTICK_PERIOD_MS);
-
-        // Move right stick up → down
-        rx = 128;
-        ry = 0;     // Up
-        send_gamepad_report(buttons, hat, lx, ly, rx, ry, l2, r2);
-        vTaskDelay(150 / portTICK_PERIOD_MS);
-
-        ry = 255;   // Down
-        send_gamepad_report(buttons, hat, lx, ly, rx, ry, l2, r2);
-        vTaskDelay(150 / portTICK_PERIOD_MS);
-
-        // Reset everything
-        buttons = 0;
-        hat = 0x08;
-        lx = ly = rx = ry = 128;
-        l2 = r2 = 0;
-        send_gamepad_report(buttons, hat, lx, ly, rx, ry, l2, r2);
-
-        vTaskDelay(400 / portTICK_PERIOD_MS);
     }
 }
 
+
+
+
+
 void bt_hid_task_start_up(void)
 {
-    xTaskCreate(bt_hid_demo_task, "bt_hid_demo_task", 2 * 1024, NULL, configMAX_PRIORITIES - 3, &s_bt_hid_param.task_hdl);
-    return;
+    /* set connected flag here as an extra guard (it will be also set in callback) */
+    g_hid_connected = true;
+    /* small delay before starting to let stack settle */
+    vTaskDelay(pdMS_TO_TICKS(150));
+    xTaskCreate(bt_hid_demo_task, "bt_hid_demo_task", 4096, NULL, 5, &s_bt_hid_param.task_hdl);
 }
 
 void bt_hid_task_shut_down(void)
@@ -510,12 +545,14 @@ static void bt_hidd_event_callback(void *handler_args, esp_event_base_t base, in
     }
     case ESP_HIDD_CONNECT_EVENT: {
         if (param->connect.status == ESP_OK) {
+            g_hid_connected = true;
             ESP_LOGI(TAG, "CONNECT OK");
             ESP_LOGI(TAG, "Setting to non-connectable, non-discoverable");
             esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
             bt_hid_task_start_up();
             set_rgb_color(0, 255, 0); // GREEN
         } else {
+            g_hid_connected = false;
             ESP_LOGE(TAG, "CONNECT failed!");
             set_rgb_color(255, 0, 0); // RED
         }
@@ -537,6 +574,7 @@ static void bt_hidd_event_callback(void *handler_args, esp_event_base_t base, in
     }
     case ESP_HIDD_DISCONNECT_EVENT: {
         if (param->disconnect.status == ESP_OK) {
+            g_hid_connected = false;
             ESP_LOGI(TAG, "DISCONNECT OK");
             bt_hid_task_shut_down();
             ESP_LOGI(TAG, "Setting to connectable, discoverable again");
@@ -549,6 +587,7 @@ static void bt_hidd_event_callback(void *handler_args, esp_event_base_t base, in
         break;
     }
     case ESP_HIDD_STOP_EVENT: {
+        g_hid_connected = false;
         ESP_LOGI(TAG, "STOP");
         set_rgb_color(0, 255, 255); // RED
         break;
@@ -559,40 +598,60 @@ static void bt_hidd_event_callback(void *handler_args, esp_event_base_t base, in
     return;
 }
 
-static void esp_sdp_cb(esp_sdp_cb_event_t event, esp_sdp_cb_param_t *param)
+static const char *sdp_event_to_str(esp_sdp_cb_event_t event)
 {
     switch (event) {
+        case ESP_SDP_INIT_EVT:              return "SDP INIT";
+        case ESP_SDP_DEINIT_EVT:            return "SDP DEINIT";
+        case ESP_SDP_SEARCH_COMP_EVT:       return "SDP SEARCH COMPLETE";
+        case ESP_SDP_CREATE_RECORD_COMP_EVT:return "SDP CREATE RECORD COMPLETE";
+        case ESP_SDP_REMOVE_RECORD_COMP_EVT:return "SDP REMOVE RECORD COMPLETE";
+        default:                            return "UNKNOWN SDP EVENT";
+    }
+}
+
+static void esp_sdp_cb(esp_sdp_cb_event_t event, esp_sdp_cb_param_t *param)
+{
+    ESP_LOGI(TAG, "SDP callback: %s (%d)", sdp_event_to_str(event), event);
+
+    switch (event) {
     case ESP_SDP_INIT_EVT:
-        ESP_LOGI(TAG, "ESP_SDP_INIT_EVT: status:%d", param->init.status);
+        ESP_LOGI(TAG, "INIT: status=%d", param->init.status);
         if (param->init.status == ESP_SDP_SUCCESS) {
             esp_bluetooth_sdp_dip_record_t dip_record = {
-                .hdr =
-                    {
-                        .type = ESP_SDP_TYPE_DIP_SERVER,
-                    },
+                .hdr = {
+                    .type = ESP_SDP_TYPE_DIP_SERVER,
+                },
                 .vendor           = bt_hid_config.vendor_id,
                 .vendor_id_source = ESP_SDP_VENDOR_ID_SRC_BT,
                 .product          = bt_hid_config.product_id,
                 .version          = bt_hid_config.version,
                 .primary_record   = true,
             };
-            esp_sdp_create_record((esp_bluetooth_sdp_record_t *)&dip_record);
+            esp_err_t err = esp_sdp_create_record((esp_bluetooth_sdp_record_t *)&dip_record);
+            ESP_LOGI(TAG, "Creating DIP record, esp_sdp_create_record() returned: %s", esp_err_to_name(err));
         }
         break;
+
     case ESP_SDP_DEINIT_EVT:
-        ESP_LOGI(TAG, "ESP_SDP_DEINIT_EVT: status:%d", param->deinit.status);
+        ESP_LOGI(TAG, "DEINIT: status=%d", param->deinit.status);
         break;
+
     case ESP_SDP_SEARCH_COMP_EVT:
-        ESP_LOGI(TAG, "ESP_SDP_SEARCH_COMP_EVT: status:%d", param->search.status);
+        ESP_LOGI(TAG, "SEARCH COMPLETE: status=%d", param->search.status);
         break;
+
     case ESP_SDP_CREATE_RECORD_COMP_EVT:
-        ESP_LOGI(TAG, "ESP_SDP_CREATE_RECORD_COMP_EVT: status:%d, handle:0x%x", param->create_record.status,
-                 param->create_record.record_handle);
+        ESP_LOGI(TAG, "CREATE RECORD COMPLETE: status=%d, handle=0x%x",
+                 param->create_record.status, param->create_record.record_handle);
         break;
+
     case ESP_SDP_REMOVE_RECORD_COMP_EVT:
-        ESP_LOGI(TAG, "ESP_SDP_REMOVE_RECORD_COMP_EVT: status:%d", param->remove_record.status);
+        ESP_LOGI(TAG, "REMOVE RECORD COMPLETE: status=%d", param->remove_record.status);
         break;
+
     default:
+        ESP_LOGW(TAG, "Unhandled SDP event %d", event);
         break;
     }
 }
