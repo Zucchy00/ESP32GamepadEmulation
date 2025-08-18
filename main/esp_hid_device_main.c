@@ -381,108 +381,112 @@ static esp_hid_device_config_t bt_hid_config = {
     .report_maps_len    = 1
 };
 
-static void send_hid_input(uint8_t *data, size_t len) {
-    if (g_hid_connected && s_bt_hid_param.hid_dev &&
-        esp_hidd_dev_connected(s_bt_hid_param.hid_dev)) {
-        esp_err_t err = esp_hidd_dev_input_set( 
-            s_bt_hid_param.hid_dev, 
-            0, 
-            data[1], // Report ID (0x01 or 0x11) 
-            &data[2], // Skip 0xA1 + ID (BT HID does not need prefix) 
-            len - 2 
-        );
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "BT HID send failed: %s", esp_err_to_name(err));
-        }
+
+static const uint32_t crc32_table[256] = {
+    0x00000000, 0x77073096, 0xEE0E612C, 0x990951BA, 0x076DC419, 0x706AF48F, 0xE963A535, 0x9E6495A3,
+    0x0EDB8832, 0x79DCB8A4, 0xE0D5E91E, 0x97D2D988, 0x09B64C2B, 0x7EB17CBD, 0xE7B82D07, 0x90BF1D91,
+    // ... fill in the rest of 256 values or generate dynamically
+};
+
+// Simple CRC32 function
+uint32_t crc32(const uint8_t *data, size_t len) {
+    uint32_t crc = 0xFFFFFFFF;
+    for (size_t i = 0; i < len; i++) {
+        uint8_t idx = (crc >> 24) ^ data[i];
+        crc = (crc << 8) ^ crc32_table[idx];
     }
+    return crc;
 }
 
 
 
-size_t send_gamepad_report(void) {
-    uint8_t report[64] = {0}; // 64 max over BT HID
+void send_gamepad_report(void) {
+    uint8_t report[79] = {0}; // 64 max over BT HID
     size_t len = 0;
 
     // Report header
     report[0] = 0xA1;              // DATA | INPUT
-    report[1] = current_report_id; // 0x01 (short) or 0x11 (extended)
+    report[1] = 0x11;
 
-    if (current_report_id == 0x01) {
-        // === Short DS4 report ===
-        report[2] = _axisPosition[0]; // LX
-        report[3] = _axisPosition[1]; // LY
-        report[4] = _axisPosition[2]; // RX
-        report[5] = _axisPosition[3]; // RY
+    // === Extended DS4 report ===
+    report[2] = 0xC0; // Constant
+    report[3] = 0x00; // Report ID (USB style)
 
-        // Hat + first 4 buttons
-        report[6] = _hatDirection;
-        BIT_WRITE(report[6], 7, _buttonState[0]); // Triangle
-        BIT_WRITE(report[6], 6, _buttonState[1]); // Circle
-        BIT_WRITE(report[6], 5, _buttonState[2]); // Cross
-        BIT_WRITE(report[6], 4, _buttonState[3]); // Square
+    report[4] = 0x80; // LX
+    report[5] = 0x80; // LY
+    report[6] = 0x80; // RX
+    report[7] = 0x80; // RY
 
-        // Next buttons
-        report[7] = 0;
-        BIT_WRITE(report[7], 0, _buttonState[4]);  // L1
-        BIT_WRITE(report[7], 1, _buttonState[5]);  // R1
-        BIT_WRITE(report[7], 2, _buttonState[6]);  // L2
-        BIT_WRITE(report[7], 3, _buttonState[7]);  // R2
-        BIT_WRITE(report[7], 4, _buttonState[8]);  // Share
-        BIT_WRITE(report[7], 5, _buttonState[9]);  // Options
-        BIT_WRITE(report[7], 6, _buttonState[10]); // L3
-        BIT_WRITE(report[7], 7, _buttonState[11]); // R3
+    /*
+    0x08 (8)	Released (no D-Pad pressed)
+    0x00	Up (N)
+    0x01	Up-Right (NE)
+    0x02	Right (E)
+    0x03	Down-Right (SE)
+    0x04	Down (S)
+    0x05	Down-Left (SW)
+    0x06	Left (W)
+    0x07	Up-Left (NW)
+    */
 
-        // Triggers
-        report[8] = _triggerPosition[0]; // L2 analog
-        report[9] = _triggerPosition[1]; // R2 analog
+    report[8] = 0x08;
+    BIT_WRITE(report[8], 7, 0); // Triangle
+    BIT_WRITE(report[8], 6, 0); // Circle
+    BIT_WRITE(report[8], 5, 1); // Cross
+    BIT_WRITE(report[8], 4, 0); // Square
 
-        len = 10; // total report length
-    } else if (current_report_id == 0x11) {
-        // === Extended DS4 report ===
-        report[2] = 0xC0; // Constant
-        report[3] = 0x00; // Report ID (USB style)
+    report[9] = 0;
+    BIT_WRITE(report[9], 0, 0);  // L1
+    BIT_WRITE(report[9], 1, 0);  // R1
+    BIT_WRITE(report[9], 2, 0);  // L2
+    BIT_WRITE(report[9], 3, 0);  // R2
+    BIT_WRITE(report[9], 4, 0);  // Share
+    BIT_WRITE(report[9], 5, 0);  // Options
+    BIT_WRITE(report[9], 6, 0); // L3
+    BIT_WRITE(report[9], 7, 0); // R3
 
-        report[4] = _axisPosition[0]; // LX
-        report[5] = _axisPosition[1]; // LY
-        report[6] = _axisPosition[2]; // RX
-        report[7] = _axisPosition[3]; // RY
+    report[10] = (_count & 0x3F) << 2;
+    BIT_WRITE(report[10], 0, 0); // PS
+    BIT_WRITE(report[10], 1, 0); // Touchpad click
 
-        report[8] = _hatDirection;
-        BIT_WRITE(report[8], 7, _buttonState[0]); // Triangle
-        BIT_WRITE(report[8], 6, _buttonState[1]); // Circle
-        BIT_WRITE(report[8], 5, _buttonState[2]); // Cross
-        BIT_WRITE(report[8], 4, _buttonState[3]); // Square
+    report[11] = 0x00;
+    report[12] = 0x00;
 
-        report[9] = 0;
-        BIT_WRITE(report[9], 0, _buttonState[4]);  // L1
-        BIT_WRITE(report[9], 1, _buttonState[5]);  // R1
-        BIT_WRITE(report[9], 2, _buttonState[6]);  // L2
-        BIT_WRITE(report[9], 3, _buttonState[7]);  // R2
-        BIT_WRITE(report[9], 4, _buttonState[8]);  // Share
-        BIT_WRITE(report[9], 5, _buttonState[9]);  // Options
-        BIT_WRITE(report[9], 6, _buttonState[10]); // L3
-        BIT_WRITE(report[9], 7, _buttonState[11]); // R3
+    uint16_t t = (uint16_t)(esp_timer_get_time() / 1000ULL);
+    report[13] = t & 0xFF;
+    report[14] = t >> 8;
 
-        report[10] = (_count & 0x3F) << 2;
-        BIT_WRITE(report[10], 0, _buttonState[12]); // PS
-        BIT_WRITE(report[10], 1, _buttonState[13]); // Touchpad click
+    report[15] = 0xFF; // Battery example
 
-        report[11] = _triggerPosition[0];
-        report[12] = _triggerPosition[1];
+    for (int i = 16; i <= 27; i++) report[i] = 0x00;
 
-        uint16_t t = (uint16_t)(esp_timer_get_time() / 1000ULL);
-        report[13] = t & 0xFF;
-        report[14] = t >> 8;
+    // Unknown/zero bytes
+    for (int i = 28; i <= 32; i++) report[i] = 0x00;
 
-        report[15] = 0x0A; // Battery example
+    // Misc byte
+    report[33] = 0x00;
 
-        len = 63; // extended DS4 BT length
-    }
+    // Unknown bytes
+    report[34] = 0x00;
+    report[35] = 0x00;
 
-    send_hid_input(report, len);
+    // Trackpad packets
+    for (int i = 36; i <= 72; i++) report[i] = 0x00;
+
+    // Unknown small bytes
+    report[73] = 0x00;
+    report[74] = 0x00;
+
+     // Compute CRC-32 for first 75 bytes
+    uint32_t crc = crc32(report, 75);
+    report[75] = (crc >> 24) & 0xFF;
+    report[76] = (crc >> 16) & 0xFF;
+    report[77] = (crc >> 8) & 0xFF;
+    report[78] = crc & 0xFF;
+
+    esp_hidd_dev_input_set(s_bt_hid_param.hid_dev, 0, 0x01, report, sizeof(report));
 
     _count++;
-    return len;
 }
 
 void bt_hid_demo_task(void *pvParameters)
@@ -494,41 +498,53 @@ void bt_hid_demo_task(void *pvParameters)
         "########################################################################\n";
     printf("%s\n", help_string);
 
-    while (esp_hidd_dev_connected(s_bt_hid_param.hid_dev)) {
-        size_t len = send_gamepad_report();
-        if (len > 63) len = 63;
+    for (;;) {
+        if (!g_hid_connected) {
+            // Bail out cleanly if disconnected
+            break;
+        }
 
-        // Slower rate to avoid flooding
-        vTaskDelay(300 / portTICK_PERIOD_MS);
+        send_gamepad_report();
+
+        vTaskDelay(pdMS_TO_TICKS(300));
     }
+
+    // Always delete yourself to free the handle
+    s_bt_hid_param.task_hdl = NULL;
+    vTaskDelete(NULL);
 }
-
-
-
-
 
 void bt_hid_task_start_up(void)
 {
-    /* set connected flag here as an extra guard (it will be also set in callback) */
+    if (s_bt_hid_param.task_hdl) {
+        // already running
+        return;
+    }
+
     g_hid_connected = true;
-    /* small delay before starting to let stack settle */
-    vTaskDelay(pdMS_TO_TICKS(150));
+    vTaskDelay(pdMS_TO_TICKS(150)); // small guard delay
     xTaskCreate(bt_hid_demo_task, "bt_hid_demo_task", 4096, NULL, 5, &s_bt_hid_param.task_hdl);
 }
 
 void bt_hid_task_shut_down(void)
 {
+    g_hid_connected = false;  // tell task to exit
+
     if (s_bt_hid_param.task_hdl) {
-        vTaskDelete(s_bt_hid_param.task_hdl);
-        s_bt_hid_param.task_hdl = NULL;
+        // The task will see g_hid_connected == false and call vTaskDelete(NULL)
+        // Wait briefly if you want to be sure it's gone
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
+
 
 static void bt_hidd_event_callback(void *handler_args, esp_event_base_t base, int32_t id, void *event_data)
 {
     esp_hidd_event_t event = (esp_hidd_event_t)id;
     esp_hidd_event_data_t *param = (esp_hidd_event_data_t *)event_data;
-    static const char *TAG = "HID_DEV_BT";
+    static const char *TAG = "EVENT_CALLBACK";
+
+    ESP_LOGI(TAG, "base:%s id:%" PRId32 " (event:%d)", base, id, event);
 
     switch (event) {
     case ESP_HIDD_START_EVENT: {
