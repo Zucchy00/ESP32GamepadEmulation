@@ -60,6 +60,7 @@ static volatile bool g_hid_connected = false;
 #define LEDC_OUTPUT_B   LEDC_CHANNEL_2
 #define LEDC_DUTY_RES   LEDC_TIMER_8_BIT // 8-bit resolution
 #define LEDC_FREQUENCY  5000             // 5 kHz
+#define MAX_BT_HID_SIZE 63
 
 void init_ledc()
 {
@@ -398,6 +399,16 @@ uint32_t crc32(const uint8_t *data, size_t len) {
     return crc;
 }
 
+void send_hid_report_fragmented(uint8_t *report, size_t len) {
+    size_t offset = 0;
+    while (offset < len) {
+        size_t chunk = (len - offset > MAX_BT_HID_SIZE) ? MAX_BT_HID_SIZE : (len - offset);
+        esp_hidd_dev_input_set(s_bt_hid_param.hid_dev, 0, 0x01, report + offset, chunk);
+        offset += chunk;
+        vTaskDelay(pdMS_TO_TICKS(5)); // small delay to avoid congestion
+    }
+}
+
 
 
 void send_gamepad_report(void) {
@@ -484,7 +495,7 @@ void send_gamepad_report(void) {
     report[77] = (crc >> 8) & 0xFF;
     report[78] = crc & 0xFF;
 
-    esp_hidd_dev_input_set(s_bt_hid_param.hid_dev, 0, 0x01, report, sizeof(report));
+    send_hid_report_fragmented(report, sizeof(report));
 
     _count++;
 }
