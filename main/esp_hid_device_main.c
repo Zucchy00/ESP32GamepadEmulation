@@ -43,7 +43,7 @@ bool _buttonState[14] = {false};
 uint8_t _triggerPosition[2] = {0, 0};
 int _hatDirection = 8;
 
-static uint8_t current_report_id = 0x01;
+static uint32_t crc32_table[256];
 
 /* connection flag — set in event callback */
 static volatile bool g_hid_connected = false;
@@ -382,14 +382,20 @@ static esp_hid_device_config_t bt_hid_config = {
     .report_maps_len    = 1
 };
 
+static void crc32_init_table(void) {
+    const uint32_t poly = 0x04C11DB7;
+    for (uint32_t i = 0; i < 256; i++) {
+        uint32_t crc = i << 24;
+        for (int j = 0; j < 8; j++) {
+            if (crc & 0x80000000)
+                crc = (crc << 1) ^ poly;
+            else
+                crc <<= 1;
+        }
+        crc32_table[i] = crc;
+    }
+}
 
-static const uint32_t crc32_table[256] = {
-    0x00000000, 0x77073096, 0xEE0E612C, 0x990951BA, 0x076DC419, 0x706AF48F, 0xE963A535, 0x9E6495A3,
-    0x0EDB8832, 0x79DCB8A4, 0xE0D5E91E, 0x97D2D988, 0x09B64C2B, 0x7EB17CBD, 0xE7B82D07, 0x90BF1D91,
-    // ... fill in the rest of 256 values or generate dynamically
-};
-
-// Simple CRC32 function
 uint32_t crc32(const uint8_t *data, size_t len) {
     uint32_t crc = 0xFFFFFFFF;
     for (size_t i = 0; i < len; i++) {
@@ -412,93 +418,82 @@ void send_hid_report_fragmented(uint8_t *report, size_t len) {
 
 
 void send_gamepad_report(void) {
-    uint8_t report[79] = {0}; // 64 max over BT HID
-    size_t len = 0;
+    if (!esp_hidd_dev_connected(s_bt_hid_param.hid_dev)) return;
 
-    // Report header
-    report[0] = 0xA1;              // DATA | INPUT
-    report[1] = 0x11;
+    uint8_t report[79] = {0};
 
-    // === Extended DS4 report ===
-    report[2] = 0xC0; // Constant
-    report[3] = 0x00; // Report ID (USB style)
+    report[0] = 0xA1;  // HID BT DATA | INPUT
+    report[1] = 0x11;  // Report ID
 
+    report[2] = 0xC0;  // Constant
+    report[3] = 0x00;
+
+    // Sticks (centered at 0x80)
     report[4] = 0x80; // LX
     report[5] = 0x80; // LY
     report[6] = 0x80; // RX
     report[7] = 0x80; // RY
 
-    /*
-    0x08 (8)	Released (no D-Pad pressed)
-    0x00	Up (N)
-    0x01	Up-Right (NE)
-    0x02	Right (E)
-    0x03	Down-Right (SE)
-    0x04	Down (S)
-    0x05	Down-Left (SW)
-    0x06	Left (W)
-    0x07	Up-Left (NW)
-    */
-
-    report[8] = 0x08;
-    BIT_WRITE(report[8], 7, 0); // Triangle
-    BIT_WRITE(report[8], 6, 0); // Circle
-    BIT_WRITE(report[8], 5, 1); // Cross
+    // D-Pad + buttons
+    report[8] = 0x08; // Neutral d-pad
     BIT_WRITE(report[8], 4, 0); // Square
+    BIT_WRITE(report[8], 5, 0); // Cross
+    BIT_WRITE(report[8], 6, 0); // Circle
+    BIT_WRITE(report[8], 7, 0); // Triangle
 
+    // Shoulder + options
     report[9] = 0;
-    BIT_WRITE(report[9], 0, 0);  // L1
-    BIT_WRITE(report[9], 1, 0);  // R1
-    BIT_WRITE(report[9], 2, 0);  // L2
-    BIT_WRITE(report[9], 3, 0);  // R2
-    BIT_WRITE(report[9], 4, 0);  // Share
-    BIT_WRITE(report[9], 5, 0);  // Options
+    BIT_WRITE(report[9], 0, 0); // L1
+    BIT_WRITE(report[9], 1, 0); // R1
+    BIT_WRITE(report[9], 2, 0); // L2
+    BIT_WRITE(report[9], 3, 0); // R2
+    BIT_WRITE(report[9], 4, 0); // Share
+    BIT_WRITE(report[9], 5, 0); // Options
     BIT_WRITE(report[9], 6, 0); // L3
     BIT_WRITE(report[9], 7, 0); // R3
 
-    report[10] = (_count & 0x3F) << 2;
+    // PS + Touchpad button
+    report[10] = 0;
     BIT_WRITE(report[10], 0, 0); // PS
     BIT_WRITE(report[10], 1, 0); // Touchpad click
 
-    report[11] = 0x00;
-    report[12] = 0x00;
+    // Triggers (analog values)
+    report[11] = 0x00; // L2 analog
+    report[12] = 0x00; // R2 analog
 
+    // Timestamp
     uint16_t t = (uint16_t)(esp_timer_get_time() / 1000ULL);
     report[13] = t & 0xFF;
     report[14] = t >> 8;
 
-    report[15] = 0xFF; // Battery example
+    // Battery
+    report[15] = 0xFF; // full
 
-    for (int i = 16; i <= 27; i++) report[i] = 0x00;
+    // Gyro + Accel (zeros for now)
+    memset(&report[16], 0, 12);
 
-    // Unknown/zero bytes
-    for (int i = 28; i <= 32; i++) report[i] = 0x00;
+    // Reserved / padding
+    memset(&report[28], 0, 8);
 
-    // Misc byte
-    report[33] = 0x00;
+    // Touchpad packet (zeros for now)
+    memset(&report[36], 0, 37);
 
-    // Unknown bytes
-    report[34] = 0x00;
-    report[35] = 0x00;
+    // Reserved
+    report[73] = 0;
+    report[74] = 0;
 
-    // Trackpad packets
-    for (int i = 36; i <= 72; i++) report[i] = 0x00;
-
-    // Unknown small bytes
-    report[73] = 0x00;
-    report[74] = 0x00;
-
-     // Compute CRC-32 for first 75 bytes
+    // Compute CRC-32 over first 75 bytes
     uint32_t crc = crc32(report, 75);
     report[75] = (crc >> 24) & 0xFF;
     report[76] = (crc >> 16) & 0xFF;
     report[77] = (crc >> 8) & 0xFF;
     report[78] = crc & 0xFF;
 
+    // Send
     send_hid_report_fragmented(report, sizeof(report));
-
     _count++;
 }
+
 
 void bt_hid_demo_task(void *pvParameters)
 {
@@ -517,7 +512,7 @@ void bt_hid_demo_task(void *pvParameters)
 
         send_gamepad_report();
 
-        vTaskDelay(pdMS_TO_TICKS(300));
+        vTaskDelay(pdMS_TO_TICKS(30));
     }
 
     // Always delete yourself to free the handle
@@ -533,7 +528,7 @@ void bt_hid_task_start_up(void)
     }
 
     g_hid_connected = true;
-    vTaskDelay(pdMS_TO_TICKS(150)); // small guard delay
+    vTaskDelay(pdMS_TO_TICKS(50)); // small guard delay
     xTaskCreate(bt_hid_demo_task, "bt_hid_demo_task", 4096, NULL, 5, &s_bt_hid_param.task_hdl);
 }
 
@@ -578,6 +573,23 @@ static void bt_hidd_event_callback(void *handler_args, esp_event_base_t base, in
             esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
             bt_hid_task_start_up();
             set_rgb_color(0, 255, 0); // GREEN
+            esp_hid_transport_t transport = esp_hidd_dev_transport_get(s_bt_hid_param.hid_dev);
+
+            switch (transport) {
+                case ESP_HID_TRANSPORT_BT:
+                    printf("HID transport = BT Classic\n");
+                    break;
+                case ESP_HID_TRANSPORT_BLE:
+                    printf("HID transport = BLE\n");
+                    break;
+                case ESP_HID_TRANSPORT_USB:
+                    printf("HID transport = USB\n");
+                    break;
+                default:
+                    printf("HID transport = Unknown (%d)\n", transport);
+                    break;
+            }
+
         } else {
             g_hid_connected = false;
             ESP_LOGE(TAG, "CONNECT failed!");
@@ -590,7 +602,30 @@ static void bt_hidd_event_callback(void *handler_args, esp_event_base_t base, in
         break;
     }
     case ESP_HIDD_OUTPUT_EVENT: {
-        ESP_LOGI(TAG, "OUTPUT[%u]: %8s ID: %2u, Len: %d, Data:", param->output.map_index, esp_hid_usage_str(param->output.usage), param->output.report_id, param->output.length);
+    ESP_LOGI(TAG, "OUTPUT[%u]: usage=%s ID: %2u, Len: %d",
+        param->output.map_index,
+        esp_hid_usage_str(param->output.usage),
+        param->output.report_id,
+        param->output.length);
+
+        if (param->output.length >= 11 && param->output.report_id == 0x11) {
+            uint8_t *out = param->output.data;
+
+            // Rumble
+            uint8_t rumble_right = out[6]; // small motor
+            uint8_t rumble_left  = out[7]; // big motor
+            ESP_LOGI(TAG, "Rumble: left=%d, right=%d", rumble_left, rumble_right);
+
+            // Lightbar RGB
+            uint8_t r = out[8];
+            uint8_t g = out[9];
+            uint8_t b = out[10];
+            ESP_LOGI(TAG, "Lightbar RGB: R=%d G=%d B=%d", r, g, b);
+            set_rgb_color(r, g, b);
+
+            // (Optional) LED fade / flash values in out[11..14]
+        }
+
         ESP_LOG_BUFFER_HEX(TAG, param->output.data, param->output.length);
         break;
     }
@@ -705,6 +740,7 @@ void app_main(void)
     set_rgb_color(255, 255, 255);
     // Generate the serial number during runtime
     generate_serial_number(serial_number, sizeof(serial_number));
+    crc32_init_table();
 
     // Set the serial number in the configuration
     bt_hid_config.serial_number = serial_number;
