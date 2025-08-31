@@ -60,7 +60,7 @@ static volatile bool g_hid_connected = false;
 #define LEDC_OUTPUT_B   LEDC_CHANNEL_2
 #define LEDC_DUTY_RES   LEDC_TIMER_8_BIT // 8-bit resolution
 #define LEDC_FREQUENCY  5000             // 5 kHz
-#define MAX_BT_HID_SIZE 63
+#define MAX_BT_HID_SIZE 672
 
 void init_ledc()
 {
@@ -417,38 +417,93 @@ void send_hid_report_fragmented(uint8_t *report, size_t len) {
 void send_gamepad_report(void) {
     if (!esp_hidd_dev_connected(s_bt_hid_param.hid_dev)) return;
 
+    static uint8_t counter = 0; // incrementing report counter
+
     uint8_t report[79] = {0};
 
+    // --- Header ---
     report[0] = 0x11;  // Report ID
     report[1] = 0xC0;  // Constant
-    report[2] = 0x00;
+    report[2] = 0x00;  // Protocol-specific
 
-    // Sticks (centered at 0x80)
-    report[3] = 0x80; // LX
-    report[4] = 0x80; // LY
-    report[5] = 0x80; // RX
-    report[6] = 0x80; // RY
+    // --- Sticks (centered at 0x80) ---
+    report[3] = 0x80; // Left Stick X
+    report[4] = 0x80; // Left Stick Y
+    report[5] = 0x80; // Right Stick X
+    report[6] = 0x80; // Right Stick Y
 
-    // D-Pad + buttons
-    report[7] = 0x08; // Neutral d-pad
-    BIT_WRITE(report[7], 4, 0); // Square
-    BIT_WRITE(report[7], 5, 0); // Cross
-    BIT_WRITE(report[7], 6, 0); // Circle
-    BIT_WRITE(report[7], 7, 0); // Triangle
+    // --- D-Pad + face buttons ---
+    report[7] = 0x08; // Neutral D-Pad
+    BIT_WRITE(report[7], 4, _buttonState[0]); // Square
+    BIT_WRITE(report[7], 5, _buttonState[1]); // Cross
+    BIT_WRITE(report[7], 6, _buttonState[2]); // Circle
+    BIT_WRITE(report[7], 7, _buttonState[3]); // Triangle
 
-    // Shoulder + options
+    // --- Shoulder + misc buttons ---
     report[8] = 0;
-    // ... continue filling buttons, triggers, gyro, touchpad, etc.
-    // same as before but shifted by 1 due to report_id at start
+    BIT_WRITE(report[8], 0, _buttonState[4]); // L1
+    BIT_WRITE(report[8], 1, _buttonState[5]); // R1
+    BIT_WRITE(report[8], 2, _buttonState[6]); // L2 digital
+    BIT_WRITE(report[8], 3, _buttonState[7]); // R2 digital
+    BIT_WRITE(report[8], 4, _buttonState[8]); // Share
+    BIT_WRITE(report[8], 5, _buttonState[9]); // Options
+    BIT_WRITE(report[8], 6, _buttonState[10]); // L3
+    BIT_WRITE(report[8], 7, _buttonState[11]); // R3
 
-    // Compute CRC over first 75 bytes
+    // --- Counter + special buttons ---
+    report[9]  = counter++;       // simple increment counter
+    report[10] = 0x00;            // T-PAD / PS button (0 = released)
+
+    // --- Triggers ---
+    report[11] = _triggerPosition[0]; // Left Trigger (0-255)
+    report[12] = _triggerPosition[1]; // Right Trigger (0-255)
+
+    // --- Timestamp (2 bytes) ---
+    report[13] = 0x00;
+    report[14] = 0x00;
+
+    // --- Battery / status ---
+    report[15] = 0xFF; // battery full
+
+    // --- Gyro: Angular velocity X,Y,Z ---
+    report[16] = 0x00; report[17] = 0x00; // X
+    report[18] = 0x00; report[19] = 0x00; // Y
+    report[20] = 0x00; report[21] = 0x00; // Z
+
+    // --- Acceleration X,Y,Z ---
+    report[22] = 0x00; report[23] = 0x00; // X
+    report[24] = 0x00; report[25] = 0x00; // Y
+    report[26] = 0x00; report[27] = 0x00; // Z
+
+    // --- Padding unknown bytes ---
+    for (int i = 28; i <= 32; i++) report[i] = 0x00;
+
+    // --- USB/Phone/Battery flags ---
+    report[33] = 0x00;
+
+    // --- More padding ---
+    report[34] = 0x00;
+    report[35] = 0x00;
+
+    // --- Trackpad packets ---
+    report[36] = 0x00; // number of packets
+    report[37] = 0x00; // packet counter
+
+    // Trackpad fingers (finger1 & finger2) - inactive
+    for (int i = 38; i <= 72; i++) report[i] = 0x00;
+
+    // --- Unknown bytes before CRC ---
+    report[73] = 0x00;
+    report[74] = 0x00;
+
+    // --- CRC-32 over first 75 bytes ---
     uint32_t crc = crc32(report, 75);
     report[75] = (crc >> 24) & 0xFF;
     report[76] = (crc >> 16) & 0xFF;
     report[77] = (crc >> 8) & 0xFF;
     report[78] = crc & 0xFF;
 
-    // Send in chunks
+    // --- Send the report in chunks ---
     send_hid_report_fragmented(report, sizeof(report));
 }
 
@@ -467,7 +522,7 @@ void bt_hid_demo_task(void *pvParameters)
             break;
         }
 
-        send_gamepad_report();
+        if(esp_hidd_dev_connected(s_bt_hid_param.hid_dev)) send_gamepad_report();
 
         vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -637,6 +692,7 @@ static void esp_sdp_cb(esp_sdp_cb_event_t event, esp_sdp_cb_param_t *param)
     case ESP_SDP_INIT_EVT:
         ESP_LOGI(TAG, "INIT: status=%d", param->init.status);
         if (param->init.status == ESP_SDP_SUCCESS) {
+            // --- DIP / PnP Record for PS4 ---
             esp_bluetooth_sdp_dip_record_t dip_record = {
                 .hdr = {
                     .type = ESP_SDP_TYPE_DIP_SERVER,
@@ -649,15 +705,22 @@ static void esp_sdp_cb(esp_sdp_cb_event_t event, esp_sdp_cb_param_t *param)
             };
             esp_err_t err = esp_sdp_create_record((esp_bluetooth_sdp_record_t *)&dip_record);
             ESP_LOGI(TAG, "Creating DIP record, esp_sdp_create_record() returned: %s", esp_err_to_name(err));
+
+            // --- HID Service Record for PS4 Controller ---
+            esp_bluetooth_sdp_raw_record_t hid_raw_record = {
+                .hdr = {
+                    .type = ESP_SDP_TYPE_RAW,
+                    .service_name_length = strlen(bt_hid_config.device_name),
+                    .service_name = bt_hid_config.device_name,
+                    .user1_ptr = (uint8_t *)controllerReportMap,
+                    .user1_ptr_len = sizeof(controllerReportMap),
+                    .rfcomm_channel_number = -1,
+                    .l2cap_psm = 0x11,
+                }
+            };
+            err = esp_sdp_create_record((esp_bluetooth_sdp_record_t *)&hid_raw_record);
+            ESP_LOGI(TAG, "Creating HID record, esp_sdp_create_record() returned: %s", esp_err_to_name(err));
         }
-        break;
-
-    case ESP_SDP_DEINIT_EVT:
-        ESP_LOGI(TAG, "DEINIT: status=%d", param->deinit.status);
-        break;
-
-    case ESP_SDP_SEARCH_COMP_EVT:
-        ESP_LOGI(TAG, "SEARCH COMPLETE: status=%d", param->search.status);
         break;
 
     case ESP_SDP_CREATE_RECORD_COMP_EVT:
@@ -669,11 +732,20 @@ static void esp_sdp_cb(esp_sdp_cb_event_t event, esp_sdp_cb_param_t *param)
         ESP_LOGI(TAG, "REMOVE RECORD COMPLETE: status=%d", param->remove_record.status);
         break;
 
+    case ESP_SDP_DEINIT_EVT:
+        ESP_LOGI(TAG, "DEINIT: status=%d", param->deinit.status);
+        break;
+
+    case ESP_SDP_SEARCH_COMP_EVT:
+        ESP_LOGI(TAG, "SEARCH COMPLETE: status=%d", param->search.status);
+        break;
+
     default:
         ESP_LOGW(TAG, "Unhandled SDP event %d", event);
         break;
     }
 }
+
 
 static const char *TAGSERIAL = "SerialNumber";
 
@@ -691,43 +763,53 @@ static void generate_serial_number(char *serial_number, size_t len) {
 
 void app_main(void)
 {
-    char serial_number[13];
+    char serial_number[13]; // 12 chars + null
 
+    // --- Initialize peripherals ---
     init_ledc();
-    set_rgb_color(255, 255, 255);
-    // Generate the serial number during runtime
+    set_rgb_color(255, 255, 255);  // white LED as startup indicator
+
+    // --- Generate dynamic serial number ---
     generate_serial_number(serial_number, sizeof(serial_number));
+    ESP_LOGI(TAGSERIAL, "Using serial number: %s", serial_number);
+
+    // --- Initialize CRC table for PS4 report integrity ---
     crc32_init_table();
 
-    // Set the serial number in the configuration
-    bt_hid_config.serial_number = serial_number;
-    esp_err_t ret;
-#if HID_DEV_MODE == HIDD_IDLE_MODE
-    ESP_LOGE(TAG, "Please turn on BT HID device or BLE!");
-    return;
-#endif
-    ret = nvs_flash_init();
+    // --- Initialize NVS ---
+    esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         ret = nvs_flash_init();
     }
-    ESP_ERROR_CHECK( ret );
+    ESP_ERROR_CHECK(ret);
 
-    ESP_LOGI(TAG, "setting hid gap, mode:%d", HID_DEV_MODE);
-    ret = esp_hid_gap_init(HID_DEV_MODE);
-    ESP_ERROR_CHECK( ret );
+    // --- Initialize HID GAP ---
+    ESP_LOGI(TAG, "Initializing HID GAP");
+    ESP_ERROR_CHECK(esp_hid_gap_init(HID_DEV_MODE));
 
-    ESP_LOGI(TAG, "setting device name");
+    // --- Set device name & COD ---
+    ESP_LOGI(TAG, "Setting device name and class of device");
     esp_bt_gap_set_device_name(bt_hid_config.device_name);
-    ESP_LOGI(TAG, "setting cod major, peripheral");
+
     esp_bt_cod_t cod = {0};
     cod.major = ESP_BT_COD_MAJOR_DEV_PERIPHERAL;
     cod.minor = ESP_BT_COD_MINOR_PERIPHERAL_JOYSTICK;
     esp_bt_gap_set_cod(cod, ESP_BT_SET_COD_MAJOR_MINOR);
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
-    ESP_LOGI(TAG, "setting bt device");
+
+    vTaskDelay(pdMS_TO_TICKS(1000)); // small guard delay
+
+    // --- Update serial in HID config BEFORE initializing HID ---
+    bt_hid_config.serial_number = serial_number;
+
+    // --- Initialize HID device ---
+    ESP_LOGI(TAG, "Initializing HID device");
     ESP_ERROR_CHECK(
-        esp_hidd_dev_init(&bt_hid_config, ESP_HID_TRANSPORT_BT, bt_hidd_event_callback, &s_bt_hid_param.hid_dev));
+        esp_hidd_dev_init(&bt_hid_config, ESP_HID_TRANSPORT_BT, bt_hidd_event_callback, &s_bt_hid_param.hid_dev)
+    );
+
+    // --- Register SDP callback and initialize SDP ---
+    ESP_LOGI(TAG, "Registering SDP callback and initializing SDP");
     ESP_ERROR_CHECK(esp_sdp_register_callback(esp_sdp_cb));
     ESP_ERROR_CHECK(esp_sdp_init());
 }
