@@ -1,0 +1,11 @@
+{
+    "idf.flashType": "UART",
+    "idf.port": "/dev/ttyUSB0",
+    "files.associations": {
+        "esp_hid_gap.h": "c",
+        "ledc.h": "c"
+    },
+    "idf.espIdfPath": "/home/Daniele/esp/v5.4/esp-idf",
+    "idf.toolsPath": "/home/Daniele/.espressif",
+    "idf.pythonInstallPath": "/usr/bin/python"
+}
