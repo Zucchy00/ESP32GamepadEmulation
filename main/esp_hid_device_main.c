@@ -34,43 +34,56 @@ typedef struct
     uint8_t *buffer;
 } local_param_t;
 
+typedef struct {
+    uint16_t x;
+    uint16_t y;
+    uint16_t rx;
+    uint16_t ry;
+    uint16_t z : 10;
+    uint8_t  : 6;
+    uint16_t rz : 10;
+    uint8_t  : 6;
+    uint16_t buttons : 10;
+    uint8_t  : 6;
+    uint8_t  hat : 4;
+    uint8_t  : 4;
+    uint8_t  system_menu : 1;
+    uint8_t  : 7;
+    uint8_t  battery;
+} __attribute__((packed)) inputReport_t;
+
+typedef struct {
+    uint8_t enable_actuators : 4;
+    uint8_t : 4;
+    uint8_t magnitude[4];
+    uint8_t duration;
+    uint8_t start_delay;
+    uint8_t loop_count;
+} __attribute__((packed)) outputReport_t;
+
+
 #if CONFIG_BT_HID_DEVICE_ENABLED
 static local_param_t s_bt_hid_param = {0};
 // Example for 8 buttons, 1 hat switch, 2 axes (X and Y)
 const uint8_t hid_descriptor[] = {
-    0x05, 0x01, // Usage Page (Generic Desktop)
-    0x09, 0x05, // Usage (Gamepad)
-    0xA1, 0x01, // Collection (Application)
-    0x05, 0x09, // Usage Page (Button)
-    0x19, 0x01, // Usage Minimum (Button 1)
-    0x29, 0x08, // Usage Maximum (Button 8)
-    0x15, 0x00, // Logical Minimum (0)
-    0x25, 0x01, // Logical Maximum (1)
-    0x95, 0x08, // Report Count (8)
-    0x75, 0x01, // Report Size (1)
-    0x81, 0x02, // Input (Data, Var, Abs)
-    0x05, 0x01, // Usage Page (Generic Desktop)
-    0x09, 0x39, // Usage (Hat switch)
-    0x15, 0x00, // Logical Minimum (0)
-    0x25, 0x07, // Logical Maximum (7)
-    0x35, 0x00, // Physical Minimum (0)
-    0x46, 0x3B, 0x01, // Physical Maximum (315)
-    0x65, 0x14, // Unit (Eng Rot:Angular Pos)
-    0x75, 0x04, // Report Size (4)
-    0x95, 0x01, // Report Count (1)
-    0x81, 0x02, // Input (Data, Var, Abs)
-    0x75, 0x04, // Report Size (4)
-    0x95, 0x01, // Report Count (1)
-    0x81, 0x03, // Input (Cnst, Var, Abs)
-    0x09, 0x30, // Usage (X)
-    0x09, 0x31, // Usage (Y)
-    0x15, 0x81, // Logical Minimum (-127)
-    0x25, 0x7F, // Logical Maximum (127)
-    0x75, 0x08, // Report Size (8)
-    0x95, 0x02, // Report Count (2)
-    0x81, 0x02, // Input (Data, Var, Abs)
-    0xC0        // End Collection
+    0x05,0x01,0x09,0x05,0xA1,0x01,0xA1,0x00,0x09,0x30,0x09,0x31,0x15,0x00,0x27,0xFF,0xFF,
+    0x00,0x00,0x95,0x02,0x75,0x10,0x81,0x02,0xC0,0xA1,0x00,0x09,0x33,0x09,0x34,0x15,0x00,
+    0x27,0xFF,0xFF,0x00,0x00,0x95,0x02,0x75,0x10,0x81,0x02,0xC0,0x05,0x01,0x09,0x32,0x15,
+    0x00,0x26,0xFF,0x03,0x95,0x01,0x75,0x0A,0x81,0x02,0x15,0x00,0x25,0x00,0x75,0x06,0x95,
+    0x01,0x81,0x03,0x05,0x01,0x09,0x35,0x15,0x00,0x26,0xFF,0x03,0x95,0x01,0x75,0x0A,0x81,
+    0x02,0x15,0x00,0x25,0x00,0x75,0x06,0x95,0x01,0x81,0x03,0x05,0x09,0x19,0x01,0x29,0x0A,
+    0x95,0x0A,0x75,0x01,0x81,0x02,0x15,0x00,0x25,0x00,0x75,0x06,0x95,0x01,0x81,0x03,0x05,
+    0x01,0x09,0x39,0x15,0x01,0x25,0x08,0x35,0x00,0x46,0x3B,0x01,0x66,0x14,0x00,0x75,0x04,
+    0x95,0x01,0x81,0x42,0x75,0x04,0x95,0x01,0x15,0x00,0x25,0x00,0x35,0x00,0x45,0x00,0x65,
+    0x00,0x81,0x03,0xA1,0x02,0x05,0x0F,0x09,0x97,0x15,0x00,0x25,0x01,0x75,0x04,0x95,0x01,
+    0x91,0x02,0x15,0x00,0x25,0x00,0x91,0x03,0x09,0x70,0x15,0x00,0x25,0x64,0x75,0x08,0x95,
+    0x04,0x91,0x02,0x09,0x50,0x66,0x01,0x10,0x55,0x0E,0x26,0xFF,0x00,0x95,0x01,0x91,0x02,
+    0x09,0xA7,0x91,0x02,0x65,0x00,0x55,0x00,0x09,0x7C,0x91,0x02,0xC0,0x05,0x01,0x09,0x80,
+    0xA1,0x00,0x09,0x85,0x15,0x00,0x25,0x01,0x95,0x01,0x75,0x01,0x81,0x02,0x15,0x00,0x25,
+    0x00,0x75,0x07,0x95,0x01,0x81,0x03,0xC0,0x05,0x06,0x09,0x20,0x15,0x00,0x26,0xFF,0x00,
+    0x75,0x08,0x95,0x01,0x81,0x02,0xC0
 };
+
 
 
 static esp_hid_raw_report_map_t bt_report_maps[] = {
@@ -81,74 +94,95 @@ static esp_hid_raw_report_map_t bt_report_maps[] = {
 };
 
 static esp_hid_device_config_t bt_hid_config = {
-    .vendor_id          = 0x054C,
-    .product_id         = 0x09cc,
-    .version            = 0x0100,
-    .device_name        = "Wireless Controller",
-    .manufacturer_name  = "Sony",
-    .serial_number      = "129110990184280",
+    .vendor_id          = 0x045E,                    // Microsoft Corp
+    .product_id         = 0x028E,                    // Xbox 360 Wireless Controller (or 0x02FF for Xbox One S/Wireless)
+    .version            = 0x0110,                    // Device version
+    .device_name        = "Xbox Wireless Controller",
+    .manufacturer_name  = "Microsoft",
+    .serial_number      = "XBOX123456789",           // Example serial number
     .report_maps        = bt_report_maps,
     .report_maps_len    = 1
 };
 
-void send_gamepad_report(uint8_t report_id, uint8_t buttons, uint8_t x_axis, uint8_t y_axis)
-{
-    // HID report buffer (size of 4 bytes)
-    uint8_t buffer[4] = {0};  
-
-    // Assign values to the report
-    buffer[0] = report_id;       // Report ID (e.g., 1 for gamepad report)
-    buffer[1] = buttons;         // Buttons pressed (bitmask)
-    buffer[2] = x_axis;          // X-axis position (0-255)
-    buffer[3] = y_axis;          // Y-axis position (0-255)
-
-    // Send the report
-    esp_hidd_dev_input_set(s_bt_hid_param.hid_dev, 0, 0, buffer, sizeof(buffer));
+void send_gamepad_report(const inputReport_t *report) {
+    esp_hidd_dev_input_set(
+        s_bt_hid_param.hid_dev,
+        0, // report map index
+        0, // report ID (none defined in this descriptor)
+        (uint8_t *)report,
+        sizeof(inputReport_t)
+    );
 }
 
 void bt_hid_demo_task(void *pvParameters)
 {
-    static const char* help_string = "########################################################################\n"\
-    "BT HID gamepad demo usage:\n"\
-    "This demo will periodically send gamepad reports without user input.\n"\
-    "########################################################################\n";
+    static const char* help_string =
+        "########################################################################\n"
+        "BT HID gamepad demo usage:\n"
+        "This demo will periodically send gamepad reports without user input.\n"
+        "########################################################################\n";
     printf("%s\n", help_string);
 
-    uint8_t buttons = 0; // Initial state of buttons
-    uint8_t x_axis = 128; // Centered joystick X position
-    uint8_t y_axis = 128; // Centered joystick Y position
+    inputReport_t report = {0};
+
+    // Initialize axes to center
+    report.x = 32768;  // 0-65535
+    report.y = 32768;
+    report.rx = 32768;
+    report.ry = 32768;
+
+    // Initialize hat switch (1-8, 0 = neutral)
+    report.hat = 0;
+
+    // Initialize battery
+    report.battery = 100; // Full battery
 
     while (1) {
-        // Simulate a button press and release
-        buttons = 0b00000001; // Example button press (e.g., button 1)
-        send_gamepad_report(0x01, buttons, x_axis, y_axis);
-        vTaskDelay(100 / portTICK_PERIOD_MS); // Simulate button press duration
-
-        buttons = 0b00000000; // Release button
-        send_gamepad_report(0x01, buttons, x_axis, y_axis);
+        // ----- Simulate a button press -----
+        report.buttons = 0b0000000001; // Button 1 pressed
+        send_gamepad_report(&report);
         vTaskDelay(100 / portTICK_PERIOD_MS);
 
-        // Simulate joystick movements (left, right, up, down)
-        x_axis = 64; // Joystick left
-        send_gamepad_report(0x01, 0b00000000, x_axis, y_axis);
+        // Release button
+        report.buttons = 0;
+        send_gamepad_report(&report);
         vTaskDelay(100 / portTICK_PERIOD_MS);
 
-        x_axis = 192; // Joystick right
-        send_gamepad_report(0x01, 0b00000000, x_axis, y_axis);
+        // ----- Simulate joystick movements -----
+        report.x = 16384; // Joystick left
+        send_gamepad_report(&report);
         vTaskDelay(100 / portTICK_PERIOD_MS);
 
-        y_axis = 64; // Joystick up
-        send_gamepad_report(0x01, 0b00000000, x_axis, y_axis);
+        report.x = 49152; // Joystick right
+        send_gamepad_report(&report);
         vTaskDelay(100 / portTICK_PERIOD_MS);
 
-        y_axis = 192; // Joystick down
-        send_gamepad_report(0x01, 0b00000000, x_axis, y_axis);
+        report.y = 16384; // Joystick up
+        send_gamepad_report(&report);
         vTaskDelay(100 / portTICK_PERIOD_MS);
 
-        // Delay for the next cycle
-        vTaskDelay(200 / portTICK_PERIOD_MS);
+        report.y = 49152; // Joystick down
+        send_gamepad_report(&report);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+
+        // ----- Simulate hat switch -----
+        report.hat = 1; // Up
+        send_gamepad_report(&report);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+
+        report.hat = 5; // Down
+        send_gamepad_report(&report);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+
+        report.hat = 0; // Neutral
+        send_gamepad_report(&report);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+
+        // Delay before next cycle
+        vTaskDelay(500 / portTICK_PERIOD_MS);
     }
 }
+
 
 
 
