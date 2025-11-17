@@ -60,7 +60,7 @@ static volatile bool g_hid_connected = false;
 #define LEDC_OUTPUT_B   LEDC_CHANNEL_2
 #define LEDC_DUTY_RES   LEDC_TIMER_8_BIT // 8-bit resolution
 #define LEDC_FREQUENCY  5000             // 5 kHz
-#define MAX_BT_HID_SIZE 672
+#define MAX_BT_HID_SIZE 52
 
 void init_ledc()
 {
@@ -128,253 +128,109 @@ typedef struct
 } local_param_t;
 
 static local_param_t s_bt_hid_param = {0};
-const unsigned char controllerReportMap[] = {
-    0x05,0x01,
-    0x09,0x05,
-    0xA1,0x01,
-    0x85,0x01,
-    0x09,0x30,
-    0x09,0x31,
-    0x09,0x32,
-    0x09,0x35,
-    0x15,0x00,
-    0x26,0xFF,0x00,
-    0x75,0x08,
-    0x95,0x04,
-    0x81,0x02,
-    0x09,0x39,
-    0x15,0x00,
-    0x25,0x07,
-    0x35,0x00,
-    0x46,0x3B,0x01,
-    0x65,0x14,
-    0x75,0x04,
-    0x95,0x01,
-    0x81,0x42,
-    0x65,0x00,
-    0x05,0x09,
-    0x19,0x01,
-    0x29,0x0E,
-    0x15,0x00,
-    0x25,0x01,
-    0x75,0x01,
-    0x95,0x0E,
-    0x81,0x02,
-    0x06,0x00,0xFF,
-    0x09,0x20,
-    0x75,0x06,
-    0x95,0x01,
-    0x15,0x00,
-    0x25,0x7F,
-    0x81,0x02,
-    0x05,0x01,
-    0x09,0x33,
-    0x09,0x34,
-    0x15,0x00,
-    0x26,0xFF,0x00,
-    0x75,0x08,
-    0x95,0x02,
-    0x81,0x02,
-    0x06,0x00,0xFF,
-    0x09,0x21,
-    0x95,0x36,
-    0x81,0x02,
-    0x85,0x05,
-    0x09,0x22,
-    0x95,0x1F,
-    0x91,0x02,
-    0x85,0x04,
-    0x09,0x23,
-    0x95,0x24,
-    0xB1,0x02,
-    0x85,0x02,
-    0x09,0x24,
-    0x95,0x24,
-    0xB1,0x02,
-    0x85,0x08,
-    0x09,0x25,
-    0x95,0x03,
-    0xB1,0x02,
-    0x85,0x10,
-    0x09,0x26,
-    0x95,0x04,
-    0xB1,0x02,
-    0x85,0x11,
-    0x09,0x27,
-    0x95,0x02,
-    0xB1,0x02,
-    0x85,0x12,
-    0x06,0x02,0xFF,
-    0x09,0x21,
-    0x95,0x0F,
-    0xB1,0x02,
-    0x85,0x13,
-    0x09,0x22,
-    0x95,0x16,
-    0xB1,0x02,
-    0x85,0x14,
-    0x06,0x05,0xFF,
-    0x09,0x20,
-    0x95,0x10,
-    0xB1,0x02,
-    0x85,0x15,
-    0x09,0x21,
-    0x95,0x2C,
-    0xB1,0x02,
-    0x06,0x80,0xFF,
-    0x85,0x80,
-    0x09,0x20,
-    0x95,0x06,
-    0xB1,0x02,
-    0x85,0x81,
-    0x09,0x21,
-    0x95,0x06,
-    0xB1,0x02,
-    0x85,0x82,
-    0x09,0x22,
-    0x95,0x05,
-    0xB1,0x02,
-    0x85,0x83,
-    0x09,0x23,
-    0x95,0x01,
-    0xB1,0x02,
-    0x85,0x84,
-    0x09,0x24,
-    0x95,0x04,
-    0xB1,0x02,
-    0x85,0x85,
-    0x09,0x25,
-    0x95,0x06,
-    0xB1,0x02,
-    0x85,0x86,
-    0x09,0x26,
-    0x95,0x06,
-    0xB1,0x02,
-    0x85,0x87,
-    0x09,0x27,
-    0x95,0x23,
-    0xB1,0x02,
-    0x85,0x88,
-    0x09,0x28,
-    0x95,0x22,
-    0xB1,0x02,
-    0x85,0x89,
-    0x09,0x29,
-    0x95,0x02,
-    0xB1,0x02,
-    0x85,0x90,
-    0x09,0x30,
-    0x95,0x05,
-    0xB1,0x02,
-    0x85,0x91,
-    0x09,0x31,
-    0x95,0x03,
-    0xB1,0x02,
-    0x85,0x92,
-    0x09,0x32,
-    0x95,0x03,
-    0xB1,0x02,
-    0x85,0x93,
-    0x09,0x33,
-    0x95,0x0C,
-    0xB1,0x02,
-    0x85,0xA0,
-    0x09,0x40,
-    0x95,0x06,
-    0xB1,0x02,
-    0x85,0xA1,
-    0x09,0x41,
-    0x95,0x01,
-    0xB1,0x02,
-    0x85,0xA2,
-    0x09,0x42,
-    0x95,0x01,
-    0xB1,0x02,
-    0x85,0xA3,
-    0x09,0x43,
-    0x95,0x30,
-    0xB1,0x02,
-    0x85,0xA4,
-    0x09,0x44,
-    0x95,0x0D,
-    0xB1,0x02,
-    0x85,0xA5,
-    0x09,0x45,
-    0x95,0x15,
-    0xB1,0x02,
-    0x85,0xA6,
-    0x09,0x46,
-    0x95,0x15,
-    0xB1,0x02,
-    0x85,0xF0,
-    0x09,0x47,
-    0x95,0x3F,
-    0xB1,0x02,
-    0x85,0xF1,
-    0x09,0x48,
-    0x95,0x3F,
-    0xB1,0x02,
-    0x85,0xF2,
-    0x09,0x49,
-    0x95,0x0F,
-    0xB1,0x02,
-    0x85,0xA7,
-    0x09,0x4A,
-    0x95,0x01,
-    0xB1,0x02,
-    0x85,0xA8,
-    0x09,0x4B,
-    0x95,0x01,
-    0xB1,0x02,
-    0x85,0xA9,
-    0x09,0x4C,
-    0x95,0x08,
-    0xB1,0x02,
-    0x85,0xAA,
-    0x09,0x4E,
-    0x95,0x01,
-    0xB1,0x02,
-    0x85,0xAB,
-    0x09,0x4F,
-    0x95,0x39,
-    0xB1,0x02,
-    0x85,0xAC,
-    0x09,0x50,
-    0x95,0x39,
-    0xB1,0x02,
-    0x85,0xAD,
-    0x09,0x51,
-    0x95,0x0B,
-    0xB1,0x02,
-    0x85,0xAE,
-    0x09,0x52,
-    0x95,0x01,
-    0xB1,0x02,
-    0x85,0xAF,
-    0x09,0x53,
-    0x95,0x02,
-    0xB1,0x02,
-    0x85,0xB0,
-    0x09,0x54,
-    0x95,0x3F,
-    0xB1,0x02,
-    0xC0
+const uint8_t ds4v1_hid_descriptor[] = {
+    0x05, 0x01,        // Usage Page (Generic Desktop)
+    0x09, 0x05,        // Usage (Game Pad)
+    0xA1, 0x01,        // Collection (Application)
+    0x85, 0x01,        //   Report ID (1)
+    0x09, 0x30,        //   Usage (X)
+    0x09, 0x31,        //   Usage (Y)
+    0x09, 0x32,        //   Usage (Z)
+    0x09, 0x35,        //   Usage (Rz)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x26, 0xFF, 0x00,  //   Logical Maximum (255)
+    0x75, 0x08,        //   Report Size (8)
+    0x95, 0x04,        //   Report Count (4)
+    0x81, 0x02,        //   Input (Data,Var,Abs)
+    0x05, 0x01,
+    0x09, 0x33,        //   Usage (Rx)
+    0x09, 0x34,        //   Usage (Ry)
+    0x95, 0x02,        //   Report Count (2)
+    0x81, 0x02,        //   Input (Data,Var,Abs)
+
+    // Buttons
+    0x05, 0x09,        //   Usage Page (Button)
+    0x19, 0x01,        //   Usage Minimum (Button 1)
+    0x29, 0x0E,        //   Usage Maximum (Button 14)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x25, 0x01,        //   Logical Maximum (1)
+    0x75, 0x01,        //   Report Size (1)
+    0x95, 0x0E,        //   Report Count (14)
+    0x81, 0x02,        //   Input (Data,Var,Abs)
+
+    // Dpad
+    0x05, 0x01,
+    0x09, 0x39,        //   Usage (Hat switch)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x25, 0x07,        //   Logical Maximum (7)
+    0x35, 0x00,        //   Physical Minimum (0)
+    0x46, 0x3B, 0x01,  //   Physical Maximum (315)
+    0x65, 0x14,        //   Unit (Degrees)
+    0x75, 0x04,        //   Report Size (4)
+    0x95, 0x01,        //   Report Count (1)
+    0x81, 0x42,        //   Input (Data,Var,Abs,Null)
+    0x65, 0x00,        //   Unit (None)
+
+    // Padding
+    0x75, 0x04,
+    0x95, 0x01,
+    0x81, 0x03,
+
+    // Triggers
+    0x05, 0x02,
+    0x09, 0xC4,        //   Usage (Vibrator) – actually left trigger
+    0x09, 0xC5,        //   Usage (Vibrator) – right trigger
+    0x15, 0x00,
+    0x26, 0xFF, 0x00,
+    0x75, 0x08,
+    0x95, 0x02,
+    0x81, 0x02,
+
+    // Touchpad, gyro, accel (full DS4v1 block)
+    // --- REQUIRED FOR LINUX + PS4 ACCEPTANCE ---
+    0x06, 0x00, 0xFF,  
+    0x09, 0x20,
+    0x75, 0x06,
+    0x95, 0x01,
+    0x15, 0x00,
+    0x25, 0x7F,
+    0x81, 0x02,
+
+    // Touch + sensor packet (36 bytes)
+    0x06, 0x00, 0xFF,
+    0x09, 0x21,
+    0x95, 0x36,
+    0x81, 0x02,
+
+    // Output Report ID 0x02: rumble/LED
+    0x85, 0x02,
+    0x09, 0x22,
+    0x95, 0x1F,
+    0x91, 0x02,
+
+    // Feature Report ID 0x05 (mandatory)
+    0x85, 0x05,
+    0x09, 0x23,
+    0x95, 0x2F,
+    0xB1, 0x02,
+
+    0xC0              // End Collection
 };
 
 static esp_hid_raw_report_map_t bt_report_maps[] = {
     {
-        .data = controllerReportMap,
-        .len = sizeof(controllerReportMap)
+        .data = ds4v1_hid_descriptor,
+        .len = sizeof(ds4v1_hid_descriptor)
     },
 };
 
 static esp_hid_device_config_t bt_hid_config = {
     .vendor_id          = 0x054C,
-    .product_id         = 0x09cc,
+    .product_id         = 0x05C4,
     .version            = 0x0100,
     .device_name        = "Wireless Controller",
     .manufacturer_name  = "Sony",
-    .serial_number      = "129110990184280",
+    .serial_number      = "00000001",
     .report_maps        = bt_report_maps,
     .report_maps_len    = 1
 };
@@ -417,95 +273,70 @@ void send_hid_report_fragmented(uint8_t *report, size_t len) {
 void send_gamepad_report(void) {
     if (!esp_hidd_dev_connected(s_bt_hid_param.hid_dev)) return;
 
-    static uint8_t counter = 0; // incrementing report counter
+    static uint8_t counter = 0;
 
-    uint8_t report[79] = {0};
+    // --- Randomize analog sticks ---
+    _axisPosition[0] = rand() % 256; // Left X
+    _axisPosition[1] = rand() % 256; // Left Y
+    _axisPosition[2] = rand() % 256; // Right X
+    _axisPosition[3] = rand() % 256; // Right Y
+
+    // --- Randomize triggers ---
+    _triggerPosition[0] = rand() % 256; // L2
+    _triggerPosition[1] = rand() % 256; // R2
+
+    // --- Randomize buttons ---
+    for (int i = 0; i < 14; i++) {
+        _buttonState[i] = rand() & 1;
+    }
+
+    // --- Randomize D-Pad safely ---
+    int hat = rand() % 9; // 0–7 valid, 8 = neutral
+
+    uint8_t report[79] = {0};  // must be initialized BEFORE assignment
 
     // --- Header ---
-    report[0] = 0x11;  // Report ID
-    report[1] = 0xC0;  // Constant
-    report[2] = 0x00;  // Protocol-specific
+    report[0] = 0x01;  // Report ID
+    report[1] = 0xC0;
+    report[2] = 0x00;
 
-    // --- Sticks (centered at 0x80) ---
-    report[3] = 0x80; // Left Stick X
-    report[4] = 0x80; // Left Stick Y
-    report[5] = 0x80; // Right Stick X
-    report[6] = 0x80; // Right Stick Y
+    // --- Analog sticks ---
+    report[3] = _axisPosition[0];
+    report[4] = _axisPosition[1];
+    report[5] = _axisPosition[2];
+    report[6] = _axisPosition[3];
 
     // --- D-Pad + face buttons ---
-    report[7] = 0x08; // Neutral D-Pad
+    report[7] = hat;  // D-Pad value
     BIT_WRITE(report[7], 4, _buttonState[0]); // Square
     BIT_WRITE(report[7], 5, _buttonState[1]); // Cross
     BIT_WRITE(report[7], 6, _buttonState[2]); // Circle
     BIT_WRITE(report[7], 7, _buttonState[3]); // Triangle
 
-    // --- Shoulder + misc buttons ---
+    // --- Shoulder & misc buttons ---
     report[8] = 0;
-    BIT_WRITE(report[8], 0, _buttonState[4]); // L1
-    BIT_WRITE(report[8], 1, _buttonState[5]); // R1
-    BIT_WRITE(report[8], 2, _buttonState[6]); // L2 digital
-    BIT_WRITE(report[8], 3, _buttonState[7]); // R2 digital
-    BIT_WRITE(report[8], 4, _buttonState[8]); // Share
-    BIT_WRITE(report[8], 5, _buttonState[9]); // Options
-    BIT_WRITE(report[8], 6, _buttonState[10]); // L3
-    BIT_WRITE(report[8], 7, _buttonState[11]); // R3
+    for (int i = 4; i <= 11; i++) {
+        BIT_WRITE(report[8], i - 4, _buttonState[i]);
+    }
 
-    // --- Counter + special buttons ---
-    report[9]  = counter++;       // simple increment counter
-    report[10] = 0x00;            // T-PAD / PS button (0 = released)
+    report[9]  = counter++;
+    report[10] = 0x00; // PS / touchpad
 
     // --- Triggers ---
-    report[11] = _triggerPosition[0]; // Left Trigger (0-255)
-    report[12] = _triggerPosition[1]; // Right Trigger (0-255)
+    report[11] = _triggerPosition[0];
+    report[12] = _triggerPosition[1];
 
-    // --- Timestamp (2 bytes) ---
-    report[13] = 0x00;
-    report[14] = 0x00;
+    // --- Battery full ---
+    report[15] = 0xFF;
 
-    // --- Battery / status ---
-    report[15] = 0xFF; // battery full
+    // --- Zero out gyro, accel, trackpad, padding ---
+    for (int i = 16; i < 79; i++) report[i] = 0x00;
 
-    // --- Gyro: Angular velocity X,Y,Z ---
-    report[16] = 0x00; report[17] = 0x00; // X
-    report[18] = 0x00; report[19] = 0x00; // Y
-    report[20] = 0x00; report[21] = 0x00; // Z
-
-    // --- Acceleration X,Y,Z ---
-    report[22] = 0x00; report[23] = 0x00; // X
-    report[24] = 0x00; report[25] = 0x00; // Y
-    report[26] = 0x00; report[27] = 0x00; // Z
-
-    // --- Padding unknown bytes ---
-    for (int i = 28; i <= 32; i++) report[i] = 0x00;
-
-    // --- USB/Phone/Battery flags ---
-    report[33] = 0x00;
-
-    // --- More padding ---
-    report[34] = 0x00;
-    report[35] = 0x00;
-
-    // --- Trackpad packets ---
-    report[36] = 0x00; // number of packets
-    report[37] = 0x00; // packet counter
-
-    // Trackpad fingers (finger1 & finger2) - inactive
-    for (int i = 38; i <= 72; i++) report[i] = 0x00;
-
-    // --- Unknown bytes before CRC ---
-    report[73] = 0x00;
-    report[74] = 0x00;
-
-    // --- CRC-32 over first 75 bytes ---
-    uint32_t crc = crc32(report, 75);
-    report[75] = (crc >> 24) & 0xFF;
-    report[76] = (crc >> 16) & 0xFF;
-    report[77] = (crc >> 8) & 0xFF;
-    report[78] = crc & 0xFF;
-
-    // --- Send the report in chunks ---
+    // --- Send the report ---
     send_hid_report_fragmented(report, sizeof(report));
 }
+
+
 
 void bt_hid_demo_task(void *pvParameters)
 {
@@ -524,7 +355,7 @@ void bt_hid_demo_task(void *pvParameters)
 
         if(esp_hidd_dev_connected(s_bt_hid_param.hid_dev)) send_gamepad_report();
 
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(30));
     }
 
     // Always delete yourself to free the handle
@@ -672,72 +503,153 @@ static void bt_hidd_event_callback(void *handler_args, esp_event_base_t base, in
     return;
 }
 
-static const char *sdp_event_to_str(esp_sdp_cb_event_t event)
-{
-    switch (event) {
-        case ESP_SDP_INIT_EVT:              return "SDP INIT";
-        case ESP_SDP_DEINIT_EVT:            return "SDP DEINIT";
-        case ESP_SDP_SEARCH_COMP_EVT:       return "SDP SEARCH COMPLETE";
-        case ESP_SDP_CREATE_RECORD_COMP_EVT:return "SDP CREATE RECORD COMPLETE";
-        case ESP_SDP_REMOVE_RECORD_COMP_EVT:return "SDP REMOVE RECORD COMPLETE";
-        default:                            return "UNKNOWN SDP EVENT";
-    }
-}
+// static const char *sdp_event_to_str(esp_sdp_cb_event_t event)
+// {
+//     switch (event) {
+//         case ESP_SDP_INIT_EVT:              return "SDP INIT";
+//         case ESP_SDP_DEINIT_EVT:            return "SDP DEINIT";
+//         case ESP_SDP_SEARCH_COMP_EVT:       return "SDP SEARCH COMPLETE";
+//         case ESP_SDP_CREATE_RECORD_COMP_EVT:return "SDP CREATE RECORD COMPLETE";
+//         case ESP_SDP_REMOVE_RECORD_COMP_EVT:return "SDP REMOVE RECORD COMPLETE";
+//         default:                            return "UNKNOWN SDP EVENT";
+//     }
+// }
+
+static const uint8_t ds4v1_sdp_record[] = {
+    // Service Record Handle
+    0x36, 0x00, 0x6D,
+
+    // Attribute: ServiceClassIDList
+    0x09, 0x00, 0x01,
+    0x35, 0x03,
+    0x19, 0x11, 0x24,
+
+    // Attribute: ProtocolDescriptorList (HID Control, PSM 0x11)
+    0x09, 0x00, 0x04,
+    0x35, 0x0D,
+    0x35, 0x06,
+    0x19, 0x01, 0x00,
+    0x09, 0x00, 0x11,
+    0x35, 0x03,
+    0x19, 0x00, 0x11,
+
+    // Attribute: AdditionalProtocolDescriptorList (HID Interrupt, PSM 0x13)
+    0x09, 0x00, 0x0D,
+    0x35, 0x0F,
+    0x35, 0x0D,
+    0x35, 0x06,
+    0x19, 0x01, 0x00,
+    0x09, 0x00, 0x13,
+    0x35, 0x03,
+    0x19, 0x00, 0x11,
+
+    // Attribute: ServiceName
+    0x09, 0x01, 0x00,
+    0x25, 0x13,
+    'W','i','r','e','l','e','s','s',' ',
+    'C','o','n','t','r','o','l','l','e','r',
+
+    // Attribute: BluetoothProfileDescriptorList
+    0x09, 0x02, 0x01,
+    0x35, 0x08,
+    0x35, 0x06,
+    0x19, 0x11, 0x24,
+    0x09, 0x01, 0x11,
+
+    // HIDParserVersion
+    0x09, 0x02, 0x02,
+    0x09, 0x01, 0x11,
+
+    // HIDDeviceSubclass
+    0x09, 0x02, 0x03,
+    0x08, 0x40,
+
+    // HIDCountryCode
+    0x09, 0x02, 0x04,
+    0x08, 0x00,
+
+    // HIDVirtualCable
+    0x09, 0x02, 0x05,
+    0x28, 0x01,
+
+    // HIDReconnectInitiate
+    0x09, 0x02, 0x06,
+    0x28, 0x01,
+
+    // Sony-required HID flags
+    0x09, 0x02, 0x09,
+    0x28, 0x01,
+
+    0x09, 0x02, 0x0A,
+    0x28, 0x01,
+
+    // HIDDescriptorList (placeholder – real descriptor provided by HID stack)
+    0x09, 0x02, 0x0D,
+    0x35, 0x0C,
+    0x35, 0x0A,
+    0x08, 0x22,
+    0x25, 0x07,
+    0x00, 0x00, 0x00, 0x00
+};
+
 
 static void esp_sdp_cb(esp_sdp_cb_event_t event, esp_sdp_cb_param_t *param)
 {
-    ESP_LOGI(TAG, "SDP callback: %s (%d)", sdp_event_to_str(event), event);
+    ESP_LOGI(TAG, "SDP callback: %d", event);
 
     switch (event) {
-    case ESP_SDP_INIT_EVT:
-        ESP_LOGI(TAG, "INIT: status=%d", param->init.status);
-        if (param->init.status == ESP_SDP_SUCCESS) {
-            // --- DIP / PnP Record for PS4 ---
-            esp_bluetooth_sdp_dip_record_t dip_record = {
-                .hdr = {
-                    .type = ESP_SDP_TYPE_DIP_SERVER,
-                },
-                .vendor           = bt_hid_config.vendor_id,
-                .vendor_id_source = ESP_SDP_VENDOR_ID_SRC_BT,
-                .product          = bt_hid_config.product_id,
-                .version          = bt_hid_config.version,
-                .primary_record   = true,
-            };
-            esp_err_t err = esp_sdp_create_record((esp_bluetooth_sdp_record_t *)&dip_record);
-            ESP_LOGI(TAG, "Creating DIP record, esp_sdp_create_record() returned: %s", esp_err_to_name(err));
 
-            // --- HID Service Record for PS4 Controller ---
-            esp_bluetooth_sdp_raw_record_t hid_raw_record = {
-                .hdr = {
-                    .type = ESP_SDP_TYPE_RAW,
-                    .service_name_length = strlen(bt_hid_config.device_name),
-                    .service_name = bt_hid_config.device_name,
-                    .user1_ptr = (uint8_t *)controllerReportMap,
-                    .user1_ptr_len = sizeof(controllerReportMap),
-                    .rfcomm_channel_number = -1,
-                    .l2cap_psm = 0x11,
-                }
-            };
-            err = esp_sdp_create_record((esp_bluetooth_sdp_record_t *)&hid_raw_record);
-            ESP_LOGI(TAG, "Creating HID record, esp_sdp_create_record() returned: %s", esp_err_to_name(err));
-        }
+    case ESP_SDP_INIT_EVT: {
+        ESP_LOGI(TAG, "SDP INIT status=%d", param->init.status);
+        if (param->init.status != ESP_SDP_SUCCESS) return;
+
+        //
+        // 1. Create DS4 DIP Record
+        //
+        esp_bluetooth_sdp_dip_record_t dip_record = {
+            .hdr = { .type = ESP_SDP_TYPE_DIP_SERVER },
+            .vendor = 0x054C,
+            .vendor_id_source = ESP_SDP_VENDOR_ID_SRC_BT,
+            .product = 0x05C4,
+            .version = 0x0100,
+            .primary_record = true,
+        };
+
+        esp_err_t err = esp_sdp_create_record((esp_bluetooth_sdp_record_t *)&dip_record);
+        ESP_LOGI(TAG, "Create DIP record: %s", esp_err_to_name(err));
+
+
+        //
+        // 2. Register Raw HID SDP Record
+        //
+        const char *service_name = "Wireless Controller";
+
+        esp_bluetooth_sdp_raw_record_t raw = {
+            .hdr = {
+                .type = ESP_SDP_TYPE_RAW,
+                .service_name = (char *)service_name,
+                .service_name_length = strlen(service_name),
+
+                .user1_ptr = (uint8_t *)ds4v1_sdp_record,  // pointer to your SDP record
+                .user1_ptr_len = sizeof(ds4v1_sdp_record), // length of the SDP record
+
+                .rfcomm_channel_number = -1,
+                .l2cap_psm = 0x11
+            }
+        };
+
+
+
+
+        err = esp_sdp_create_record((esp_bluetooth_sdp_record_t *)&raw);
+        ESP_LOGI(TAG, "Create HID record: %s", esp_err_to_name(err));
         break;
+    }
 
     case ESP_SDP_CREATE_RECORD_COMP_EVT:
-        ESP_LOGI(TAG, "CREATE RECORD COMPLETE: status=%d, handle=0x%x",
-                 param->create_record.status, param->create_record.record_handle);
-        break;
-
-    case ESP_SDP_REMOVE_RECORD_COMP_EVT:
-        ESP_LOGI(TAG, "REMOVE RECORD COMPLETE: status=%d", param->remove_record.status);
-        break;
-
-    case ESP_SDP_DEINIT_EVT:
-        ESP_LOGI(TAG, "DEINIT: status=%d", param->deinit.status);
-        break;
-
-    case ESP_SDP_SEARCH_COMP_EVT:
-        ESP_LOGI(TAG, "SEARCH COMPLETE: status=%d", param->search.status);
+        ESP_LOGI(TAG, "Record created: status=%d, handle=%x",
+                 param->create_record.status,
+                 param->create_record.record_handle);
         break;
 
     default:
