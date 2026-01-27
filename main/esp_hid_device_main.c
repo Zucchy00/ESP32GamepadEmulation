@@ -673,7 +673,7 @@ static void generate_serial_number(char *serial_number, size_t len) {
 }
 
 
-void app_main(void)
+void start_ps4_hid(void)
 {
     char serial_number[13]; // 12 chars + null
 
