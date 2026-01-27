@@ -28,6 +28,9 @@
 
 #include "esp_hidd.h"
 #include "esp_hid_gap.h"
+// #include "esp_adc/adc_oneshot.h"
+// adc_oneshot_unit_handle_t adc1_handle;
+
 
 #define BIT_WRITE(byte, bit, val) \
     ((val) ? ((byte) |=  (1 << (bit))) : ((byte) &= ~(1 << (bit))))
@@ -61,6 +64,31 @@ static volatile bool g_hid_connected = false;
 #define LEDC_DUTY_RES   LEDC_TIMER_8_BIT // 8-bit resolution
 #define LEDC_FREQUENCY  5000             // 5 kHz
 #define MAX_BT_HID_SIZE 52
+
+// void init_hardware_pins(void) {
+//     // 1. Initialize ADC Unit 1
+//     adc_oneshot_unit_init_cfg_t init_config1 = {
+//         .unit_id = ADC_UNIT_1,
+//     };
+//     adc_oneshot_new_unit(&init_config1, &adc1_handle);
+
+//     // 2. Configure ADC Channels (Pin 34 = CH6, Pin 35 = CH7)
+//     adc_oneshot_chan_cfg_t config = {
+//         .bitwidth = ADC_BITWIDTH_DEFAULT,
+//         .atten = ADC_ATTEN_DB_12,
+//     };
+//     adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL_6, &config); // Pin 34
+//     adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL_7, &config); // Pin 35
+
+//     // 3. Setup Button Pin (GPIO 32)
+//     gpio_config_t io_conf = {
+//         .mode = GPIO_MODE_INPUT,
+//         .pin_bit_mask = (1ULL << GPIO_NUM_32),
+//         .pull_up_en = 1
+//     };
+//     gpio_config(&io_conf);
+// }
+
 
 void init_ledc()
 {
@@ -269,6 +297,82 @@ void send_hid_report_fragmented(uint8_t *report, size_t len) {
         vTaskDelay(pdMS_TO_TICKS(5)); // small delay to avoid congestion
     }
 }
+
+/**
+ * @brief Reads physical sensors and transmits a 79-byte DualShock 4 HID report.
+ * Moves from static/random data to real-time ADC (joysticks) and GPIO (buttons).
+ */
+
+// void send_gamepad_report(void) {
+//     if (!esp_hidd_dev_connected(s_bt_hid_param.hid_dev)) return;
+
+//     static uint8_t counter = 0;
+//     int raw_x = 2048; // Default center
+//     int raw_y = 2048; // Default center
+
+//     // 1. READ REAL-TIME ADC VALUES
+//     // ADC_CHANNEL_6 = GPIO 34 (X Axis)
+//     // ADC_CHANNEL_7 = GPIO 35 (Y Axis)
+//     adc_oneshot_read(adc1_handle, ADC_CHANNEL_6, &raw_x);
+//     adc_oneshot_read(adc1_handle, ADC_CHANNEL_7, &raw_y);
+
+//     // 2. SCALE 12-BIT (0-4095) TO 8-BIT (0-255)
+//     // We divide by 16 because 4096 / 16 = 256
+//     _axisPosition[0] = (uint8_t)(raw_x / 16); // Left Stick X
+//     _axisPosition[1] = (uint8_t)(raw_y / 16); // Left Stick Y
+    
+//     // Right stick remains centered (127) for now
+//     _axisPosition[2] = 127; 
+//     _axisPosition[3] = 127;
+
+//     // 3. READ PHYSICAL BUTTON (GPIO 32)
+//     // If using a pull-up, 0 means the button is physically pressed to GND
+//     _buttonState[1] = (gpio_get_level(GPIO_NUM_32) == 0); // Mapping to 'Cross' button
+
+//     // 4. CONSTRUCT THE 79-BYTE PS4 REPORT
+//     uint8_t report[79] = {0};
+
+//     // Header
+//     report[0] = 0x01;  // Report ID
+//     report[1] = 0xC0;
+//     report[2] = 0x00;
+
+//     // Analog sticks
+//     report[3] = _axisPosition[0];
+//     report[4] = _axisPosition[1];
+//     report[5] = _axisPosition[2];
+//     report[6] = _axisPosition[3];
+
+//     // D-Pad (8 = neutral) + Face buttons
+//     int hat = 8; 
+//     report[7] = hat;  
+//     BIT_WRITE(report[7], 4, _buttonState[0]); // Square
+//     BIT_WRITE(report[7], 5, _buttonState[1]); // Cross (Pin 32)
+//     BIT_WRITE(report[7], 6, _buttonState[2]); // Circle
+//     BIT_WRITE(report[7], 7, _buttonState[3]); // Triangle
+
+//     // Shoulder & misc buttons
+//     report[8] = 0;
+//     for (int i = 4; i <= 11; i++) {
+//         BIT_WRITE(report[8], i - 4, _buttonState[i]);
+//     }
+
+//     report[9]  = counter++; // Sequence counter
+//     report[10] = 0x00;      // PS Button / Touchpad click
+
+//     // Triggers (0-255)
+//     report[11] = 0; // L2
+//     report[12] = 0; // R2
+
+//     // Battery status (0xFF = Full/Plugged in)
+//     report[15] = 0xFF;
+
+//     // Zero out the remaining bytes (Gyro, Accel, Touchpad)
+//     for (int i = 16; i < 79; i++) report[i] = 0x00;
+
+//     // 5. SEND DATA
+//     send_hid_report_fragmented(report, sizeof(report));
+// }
 
 void send_gamepad_report(void) {
     if (!esp_hidd_dev_connected(s_bt_hid_param.hid_dev)) return;
@@ -673,12 +777,13 @@ static void generate_serial_number(char *serial_number, size_t len) {
 }
 
 
-void app_main(void)
+void start_ps4_hid(void)
 {
     char serial_number[13]; // 12 chars + null
 
     // --- Initialize peripherals ---
     init_ledc();
+    // init_hardware_pins();  
     set_rgb_color(255, 255, 255);  // white LED as startup indicator
 
     // --- Generate dynamic serial number ---
