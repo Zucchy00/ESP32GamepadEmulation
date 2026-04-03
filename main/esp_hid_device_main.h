@@ -8,6 +8,7 @@
 #define ESP_HID_DEVICE_MAIN_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include <stdbool.h>
 
 #ifdef __cplusplus
