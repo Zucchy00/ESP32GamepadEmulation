@@ -907,7 +907,7 @@ static void bt_hid_report_task(void *pvParameters)
     for (;;) {
         if (!g_hid_connected) break;
         if (esp_hidd_dev_connected(s_bt_hid_param.hid_dev)) {
-            send_gamepad_report_test();
+            send_gamepad_report();
         }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
