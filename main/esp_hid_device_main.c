@@ -72,7 +72,7 @@
  *  [27:31]  reserved
  *  [32]     battery status
  *  [33:34]  reserved
- *  [35]     touch sample count
+ *  [35]     reserved
  *  [36:71]  4× touch sample (9 bytes each)
  *  [72:74]  reserved
  *  [75:78]  CRC32 LE
@@ -85,6 +85,7 @@
 #include <time.h>
 #include <stdbool.h>
 #include "esp_random.h"
+#include "esp_hid_device_main.h"
 
 #include "driver/ledc.h"
 #include "driver/gpio.h"
@@ -113,11 +114,6 @@
 /*  Compile-time configuration                                          */
 /* ------------------------------------------------------------------ */
 
-/* RGB LED (common-anode: 0 = full on, 255 = off) */
-#define RED_LED_PIN     25
-#define GREEN_LED_PIN   26
-#define BLUE_LED_PIN    27
-
 /* Rumble motors */
 #define RUMBLE_R_PIN    18   /* right / high-freq */
 #define RUMBLE_L_PIN    19   /* left  / low-freq  */
@@ -140,6 +136,8 @@
 #define DS4_ACCEL_RES_PER_G      8192
 #define DS4_ACCEL_Y_REST         (-DS4_ACCEL_RES_PER_G)
 #define DS4_TEMPERATURE_DEFAULT  0x65
+#define DS4_TIMESTAMP_TICKS_PER_MS 188
+#define DS4_REPORT_INTERVAL_MS    10
 
 /* Output report 0x11 payload byte offsets (0-based within data[]) */
 #define DS4_OUT_RUMBLE_R   5
@@ -147,17 +145,6 @@
 #define DS4_OUT_LED_R      7
 #define DS4_OUT_LED_G      8
 #define DS4_OUT_LED_B      9
-
-/* Hat-switch values */
-#define HAT_N   0
-#define HAT_NE  1
-#define HAT_E   2
-#define HAT_SE  3
-#define HAT_S   4
-#define HAT_SW  5
-#define HAT_W   6
-#define HAT_NW  7
-#define HAT_NONE 8
 
 /* ------------------------------------------------------------------ */
 /*  Macros                                                              */
@@ -180,10 +167,10 @@ static const char *TAGSERIAL = "SerialNumber";
 adc_oneshot_unit_handle_t adc1_handle;
 
 /* Public controller state — write these from your application */
-uint8_t  g_axis[4]    = {127, 127, 127, 127}; /* LX LY RX RY */
+uint8_t  g_axis[4]    = {128, 128, 128, 128}; /* LX LY RX RY */
 bool     g_btn[14]    = {false};               /* see button map below */
 uint8_t  g_trigger[2] = {0, 0};               /* L2 R2 analog */
-int      g_hat        = HAT_NONE;              /* HAT_N..HAT_NW or HAT_NONE */
+ds4_hat_t g_hat       = DS4_HAT_NONE;
 
 /*
  * Button index map:
@@ -389,7 +376,7 @@ static esp_hid_device_config_t bt_hid_config = {
 /*  CRC32 (reflected / LE) — used by DS4 BT input reports             */
 /* ------------------------------------------------------------------ */
 
-static void crc32_init_table(void)
+void crc32_init_table(void)
 {
     const uint32_t poly = 0xEDB88320U;
     for (uint32_t i = 0; i < 256; i++) {
@@ -408,6 +395,11 @@ static uint32_t crc32_le_compute(const uint8_t *data, size_t len)
         crc = (crc >> 8) ^ crc32_table[(crc ^ data[i]) & 0xFFU];
     }
     return ~crc;
+}
+
+uint32_t crc32(const uint8_t *data, size_t len)
+{
+    return crc32_le_compute(data, len);
 }
 
 /* ------------------------------------------------------------------ */
@@ -691,8 +683,8 @@ static void ds4_fill_common_fields(uint8_t *report,
                                    uint16_t *timestamp_ptr,
                                    uint8_t  *touch_seq_ptr)
 {
-    /* Timestamp: ~5.33 µs per unit; increment by 188 per 1 ms */
-    *timestamp_ptr += 188;
+    /* Timestamp: ~5.33 µs per unit; the report task runs every 10 ms. */
+    *timestamp_ptr += DS4_TIMESTAMP_TICKS_PER_MS * DS4_REPORT_INTERVAL_MS;
     put_le16u(&report[12], *timestamp_ptr);
 
     /* Temperature */
@@ -713,8 +705,7 @@ static void ds4_fill_common_fields(uint8_t *report,
     report[33] = 0x00;
     report[34] = 0x00;
 
-    /* Touch: 4 samples, all not-touching */
-    report[35] = 0x00;
+    /* Reserved byte followed by four not-touching samples. */
     uint8_t ts = *touch_seq_ptr;
     for (int i = 0; i < 4; i++) {
         ds4_fill_touch_notouch(&report[36 + i * 9], ts++);
@@ -725,7 +716,7 @@ static void ds4_fill_common_fields(uint8_t *report,
     uint8_t crc_input[76];
     crc_input[0] = 0xA1;
     memcpy(&crc_input[1], report, DS4_BT_CRC_OFFSET);
-    uint32_t crc = crc32_le_compute(crc_input, sizeof(crc_input));
+    uint32_t crc = crc32(crc_input, sizeof(crc_input));
     report[75] = (uint8_t)(crc        & 0xFF);
     report[76] = (uint8_t)((crc >> 8) & 0xFF);
     report[77] = (uint8_t)((crc >>16) & 0xFF);
@@ -796,20 +787,18 @@ static void send_ds4_feature_report_02(void)
     }
 
     uint8_t feat[37] = {0};
-    feat[0] = 0x02;  /* report ID echo */
-
     /* Fill MAC from the ESP32's own Bluetooth address */
     const uint8_t *mac = esp_bt_dev_get_address();
     if (mac) {
         /* ESP32 address is little-endian; DS4 reports it big-endian */
-        feat[1] = mac[5];
-        feat[2] = mac[4];
-        feat[3] = mac[3];
-        feat[4] = mac[2];
-        feat[5] = mac[1];
-        feat[6] = mac[0];
+        feat[0] = mac[5];
+        feat[1] = mac[4];
+        feat[2] = mac[3];
+        feat[3] = mac[2];
+        feat[4] = mac[1];
+        feat[5] = mac[0];
     }
-    /* [7..36] remain zero */
+    /* [6..36] remain zero */
 
     esp_err_t err = esp_bt_hid_device_send_report(
         ESP_HIDD_REPORT_TYPE_FEATURE,
@@ -829,9 +818,8 @@ static void send_ds4_feature_report_02(void)
  * to read hardware version. If it gets an error it still continues, but
  * some kernels / SDL versions refuse to enumerate axes without it.
  *
- * Layout (49 bytes):
- *   [0]      0xA3 (report echo)
- *   [1..48]  ASCII hardware/firmware string, zero-padded
+ * The report ID is passed separately to the HID API. The 49-byte payload
+ * contains the firmware and hardware fields without an ID prefix.
  *
  * We send a plausible version string matching a real DS4 CUH-ZCT1.
  */
@@ -843,17 +831,15 @@ static void send_ds4_feature_report_a3(void)
     }
 
     uint8_t feat[49] = {0};
-    feat[0] = 0xA3;
-
     /* Firmware string as reported by a real DS4 (CUH-ZCT1E, hw 1.0) */
     const char *fw = "Jun  9 2016";
     const char *hw = "USB 5.0";
-    memcpy(&feat[1],  fw, strlen(fw));
-    memcpy(&feat[13], hw, strlen(hw));
-    feat[24] = 0x00;
-    feat[25] = 0x01;  /* hardware revision */
-    feat[26] = 0x08;
-    feat[27] = 0x00;
+    memcpy(&feat[0],  fw, strlen(fw));
+    memcpy(&feat[12], hw, strlen(hw));
+    feat[23] = 0x00;
+    feat[24] = 0x01;  /* hardware revision */
+    feat[25] = 0x08;
+    feat[26] = 0x00;
 
     esp_err_t err = esp_bt_hid_device_send_report(
         ESP_HIDD_REPORT_TYPE_FEATURE,
@@ -908,13 +894,26 @@ void send_gamepad_report(void)
 
     /* Read ADC → left stick axes */
     int raw_x = 2048, raw_y = 2048;
-    adc_oneshot_read(adc1_handle, ADC_CHANNEL_6, &raw_x);
-    adc_oneshot_read(adc1_handle, ADC_CHANNEL_7, &raw_y);
-    g_axis[0] = (uint8_t)(raw_x >> 4);
-    g_axis[1] = (uint8_t)(raw_y >> 4);
+    esp_err_t err_x = adc_oneshot_read(adc1_handle, ADC_CHANNEL_6, &raw_x);
+    esp_err_t err_y = adc_oneshot_read(adc1_handle, ADC_CHANNEL_7, &raw_y);
+    if (err_x == ESP_OK) {
+        g_axis[0] = (uint8_t)(raw_x >> 4);
+    } else {
+        ESP_LOGW(TAG, "Left stick X ADC read failed: %s", esp_err_to_name(err_x));
+    }
+    if (err_y == ESP_OK) {
+        g_axis[1] = (uint8_t)(raw_y >> 4);
+    } else {
+        ESP_LOGW(TAG, "Left stick Y ADC read failed: %s", esp_err_to_name(err_y));
+    }
 
     /* Read button (Cross) from GPIO32, active-low */
-    g_btn[1] = (gpio_get_level(GPIO_NUM_32) == 0);
+    int cross_level = gpio_get_level(GPIO_NUM_32);
+    if (cross_level >= 0) {
+        g_btn[1] = (cross_level == 0);
+    } else {
+        ESP_LOGW(TAG, "Cross button GPIO read failed");
+    }
 
     /* Build 79-byte report */
     uint8_t report[DS4_BT_INPUT_TOTAL_LEN] = {0};
@@ -965,57 +964,10 @@ void send_gamepad_report(void)
 }
 
 /* ------------------------------------------------------------------ */
-/*  Test / demo report (cycles axes and cross button automatically)     */
-/* ------------------------------------------------------------------ */
-
-void send_gamepad_report_test(void)
-{
-    if (!s_bt_hid_param.hid_dev ||
-        !esp_hidd_dev_connected(s_bt_hid_param.hid_dev)) {
-        return;
-    }
-
-    static uint8_t  counter   = 0;
-    static uint16_t timestamp = 0;
-    static uint8_t  touch_seq = 0;
-    static uint32_t step      = 0;
-
-    uint8_t lx = 128, ly = 128, rx = 128, ry = 128;
-    bool cross = false;
-
-    step++;
-    switch ((step / 100) % 4) {
-        case 0: lx = 0;        break;
-        case 1: lx = 255;      break;
-        case 2: ly = 0;        break;
-        case 3: cross = true;  break;
-    }
-
-    uint8_t report[DS4_BT_INPUT_TOTAL_LEN] = {0};
-    report[0] = DS4_BT_INPUT_REPORT_ID;
-    report[1] = 0xC0;
-    report[2] = 0x00;
-    report[3] = lx;
-    report[4] = ly;
-    report[5] = rx;
-    report[6] = ry;
-    report[7] = 0x08;   /* hat = none */
-    BIT_WRITE(report[7], 5, cross);
-    report[8] = 0x00;
-    report[9] = (uint8_t)((counter & 0x3F) << 2);
-    counter++;
-    report[10] = 0x00;
-    report[11] = 0x00;
-
-    ds4_fill_common_fields(report, &timestamp, &touch_seq);
-    send_hid_report_raw(report, sizeof(report));
-}
-
-/* ------------------------------------------------------------------ */
 /*  Main polling task                                                   */
 /* ------------------------------------------------------------------ */
 
-static void bt_hid_demo_task(void *pvParameters)
+static void bt_hid_report_task(void *pvParameters)
 {
     printf(
         "########################################################################\n"
@@ -1026,7 +978,7 @@ static void bt_hid_demo_task(void *pvParameters)
     for (;;) {
         if (!g_hid_connected) break;
         if (esp_hidd_dev_connected(s_bt_hid_param.hid_dev)) {
-            send_gamepad_report_test();
+            send_gamepad_report();
         }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -1040,7 +992,7 @@ static void bt_hid_task_start_up(void)
     if (s_bt_hid_param.task_hdl) return;
     g_hid_connected = true;
     vTaskDelay(pdMS_TO_TICKS(50));
-    xTaskCreate(bt_hid_demo_task, "bt_hid_task", 4096, NULL, 5,
+    xTaskCreate(bt_hid_report_task, "bt_hid_task", 4096, NULL, 5,
                 &s_bt_hid_param.task_hdl);
 }
 
@@ -1129,7 +1081,8 @@ static void bt_hidd_event_callback(void *handler_args,
          *  [10]  Lightbar flash on duration  (×10 ms)
          *  [11]  Lightbar flash off duration (×10 ms)
          */
-        if (param->output.report_id == 0x11 &&
+        if (param && param->output.data &&
+            param->output.report_id == 0x11 &&
             param->output.length    >= 10) {
 
             const uint8_t *out = param->output.data;
@@ -1146,15 +1099,21 @@ static void bt_hidd_event_callback(void *handler_args,
 
             set_rgb_color(led_r, led_g, led_b);
             set_rumble(rumble_r, rumble_l);
-        } else {
+        } else if (param) {
             ESP_LOGW(TAG, "Unhandled OUTPUT id=%u len=%u",
                      (unsigned)param->output.report_id,
                      (unsigned)param->output.length);
+        } else {
+            ESP_LOGW(TAG, "OUTPUT event has no report data");
         }
         break;
 
     /* ---- Feature report request (GET/SET from host) ---- */
     case ESP_HIDD_FEATURE_EVENT:
+        if (!param) {
+            ESP_LOGW(TAG, "FEATURE event has no report data");
+            break;
+        }
         ESP_LOGI(TAG, "FEATURE id=0x%02x len=%u",
                  (unsigned)param->feature.report_id,
                  (unsigned)param->feature.length);

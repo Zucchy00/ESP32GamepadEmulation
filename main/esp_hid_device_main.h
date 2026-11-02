@@ -46,6 +46,29 @@ void init_ledc(void);
  */
 void set_rgb_color(uint8_t r, uint8_t g, uint8_t b);
 
+typedef enum {
+    DS4_HAT_N = 0,
+    DS4_HAT_NE,
+    DS4_HAT_E,
+    DS4_HAT_SE,
+    DS4_HAT_S,
+    DS4_HAT_SW,
+    DS4_HAT_W,
+    DS4_HAT_NW,
+    DS4_HAT_NONE
+} ds4_hat_t;
+
+/*
+ * Controller state sampled by send_gamepad_report().
+ * Axis order is LX, LY, RX, RY. Button indexes are Square, Cross, Circle,
+ * Triangle, L1, R1, L2, R2, Options, L3, R3, Share, PS, Touchpad.
+ * Trigger order is L2, R2. ADC/GPIO sampling overrides LX, LY, and Cross.
+ */
+extern uint8_t g_axis[4];
+extern bool g_btn[14];
+extern uint8_t g_trigger[2];
+extern ds4_hat_t g_hat;
+
 /**
  * @brief Send a PS4 gamepad HID report
  * 
@@ -54,41 +77,14 @@ void set_rgb_color(uint8_t r, uint8_t g, uint8_t b);
  * - Button states
  * - D-pad direction
  * - Trigger values
- * - Gyroscope and accelerometer data (placeholder)
+ * - Fixed gyro and accelerometer values for an idle controller
  */
 void send_gamepad_report(void);
 
 /**
- * @brief Send HID report in fragments
- * 
- * Splits large HID reports into smaller chunks to avoid
- * Bluetooth packet size limitations.
- * 
- * @param report Pointer to the report data
- * @param len Length of the report in bytes
- */
-void send_hid_report_fragmented(uint8_t *report, size_t len);
-
-/**
- * @brief Start the HID demo task
- * 
- * Creates a FreeRTOS task that periodically sends gamepad reports.
- * This function is called automatically when a device connects.
- */
-void bt_hid_task_start_up(void);
-
-/**
- * @brief Stop the HID demo task
- * 
- * Signals the demo task to exit and cleans up resources.
- * This function is called automatically when a device disconnects.
- */
-void bt_hid_task_shut_down(void);
-
-/**
  * @brief Calculate CRC32 checksum
  * 
- * Computes a CRC32 checksum for PS4 report integrity.
+ * Computes an IEEE CRC-32 checksum. Call crc32_init_table() first.
  * 
  * @param data Pointer to data buffer
  * @param len Length of data in bytes
@@ -107,9 +103,6 @@ void crc32_init_table(void);
 #define RED_LED_PIN     25
 #define GREEN_LED_PIN   26
 #define BLUE_LED_PIN    27
-
-// Maximum Bluetooth HID packet size
-#define MAX_BT_HID_SIZE 52
 
 #ifdef __cplusplus
 }

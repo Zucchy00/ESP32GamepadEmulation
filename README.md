@@ -60,33 +60,18 @@ Note: You may customize the directory names and structure, but ensure that CMake
 idf.py create-project your_project_name
 ```
 
-### Step 2: Configure the Source Code
+### Step 2: Configure Controller Inputs
 
-In the file `esp_hid_device_main.c`, comment out the following lines to disable hardware sensor initialization:
+No source-code lines need to be commented out. On the original ESP32 target,
+the controller task samples the left stick from ADC channels 6 and 7 (GPIO 34
+and GPIO 35) and the Cross button from active-low GPIO 32. The remaining
+controls are exposed as `g_axis`, `g_btn`, `g_trigger`, and `g_hat` in
+`esp_hid_device_main.h`; the GPIO/ADC inputs take precedence for LX, LY, and
+Cross.
 
-**Line 31:**
-```c
-// #include "esp_adc/adc_oneshot.h"
-```
-
-**Line 32:**
-```c
-// adc_oneshot_unit_handle_t adc1_handle;
-```
-
-**Line 786:**
-```c
-// init_hardware_pins();
-```
-
-### Step 3: Disable Hardware Sensor Functions
-
-Comment out the entire `init_hardware_pins()` function and the `send_gamepad_report()` function as they handle physical sensor input (ADC joysticks and GPIO buttons). These can be re-enabled when you are ready to connect physical hardware.
-
-The `send_gamepad_report()` function includes:
-- ADC reading for joystick axes (GPIO 34 and GPIO 35)
-- GPIO reading for button inputs (GPIO 32)
-- Construction and transmission of 79-byte DualShock 4 HID reports
+The emulator sends 79-byte Bluetooth input reports and updates their CRC
+before transmission. Its gyro and accelerometer values represent an idle
+controller.
 
 ### Step 4: Build and Flash
 
