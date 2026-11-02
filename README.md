@@ -60,18 +60,31 @@ Note: You may customize the directory names and structure, but ensure that CMake
 idf.py create-project your_project_name
 ```
 
-### Step 2: Configure Controller Inputs
+### Step 2: Test Controller Inputs
 
-No source-code lines need to be commented out. On the original ESP32 target,
-the controller task samples the left stick from ADC channels 6 and 7 (GPIO 34
-and GPIO 35) and the Cross button from active-low GPIO 32. The remaining
-controls are exposed as `g_axis`, `g_btn`, `g_trigger`, and `g_hat` in
-`esp_hid_device_main.h`; the GPIO/ADC inputs take precedence for LX, LY, and
-Cross.
+The connected controller task runs `send_gamepad_report_test()`: it sweeps
+all four axes of both sticks with offset two-second cycles, while analog R2
+rises from 0% to 100% and analog L2 falls from 100% to 0%. At the same time,
+it tests each of the 14 digital buttons in sequence, holding each for 500 ms,
+then tests all eight D-pad directions and a neutral D-pad position. The
+complete button and D-pad sequence repeats every 23 seconds. Both analog
+triggers use the DS4's 0-255 range; the digital L2 and R2 buttons are tested
+separately in their turns.
+
+To use physical inputs instead, change the report task to call
+`send_gamepad_report()`. On the original ESP32, that function reads the left
+stick from ADC channels 6 and 7 (GPIO 34 and GPIO 35), and reads Cross from
+active-low GPIO 32. The remaining controls are exposed as `g_axis`, `g_btn`,
+`g_trigger`, and `g_hat` in `esp_hid_device_main.h`.
 
 The emulator sends 79-byte Bluetooth input reports and updates their CRC
 before transmission. Its gyro and accelerometer values represent an idle
-controller.
+controller. Bluedroid's HID L2CAP MTU is set to 128 bytes so the 78-byte
+report payload is not rejected by the framework's default 64-byte limit.
+
+ESP-IDF's HID device profile publishes the HID SDP record, including the
+configured report descriptor. The application separately registers the Device
+ID Profile record; it does not create a second raw HID SDP record.
 
 ### Step 4: Build and Flash
 

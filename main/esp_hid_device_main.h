@@ -82,6 +82,14 @@ extern ds4_hat_t g_hat;
 void send_gamepad_report(void);
 
 /**
+ * @brief Send a repeating test cycle for all buttons and D-pad directions.
+ *
+ * Sweeps the left stick and ramps analog R2 over two seconds while pressing
+ * each digital button and D-pad direction individually for 500 ms.
+ */
+void send_gamepad_report_test(void);
+
+/**
  * @brief Calculate CRC32 checksum
  * 
  * Computes an IEEE CRC-32 checksum. Call crc32_init_table() first.

@@ -235,12 +235,12 @@ static const uint8_t ds4_bt_hid_descriptor[] = {
     0x95, 0x02,         /* Report Count (2)                       */
     0x81, 0x02,         /* Input (Data, Var, Abs)                 */
 
-    /* bytes 3-6: LX LY RX RY */
+    /* bytes 3-6: left and right stick axes */
     0x05, 0x01,         /* Usage Page (Generic Desktop)           */
     0x09, 0x30,         /* Usage (X)                              */
     0x09, 0x31,         /* Usage (Y)                              */
-    0x09, 0x32,         /* Usage (Z)                              */
-    0x09, 0x35,         /* Usage (Rz)                             */
+    0x09, 0x33,         /* Usage (Rx)                             */
+    0x09, 0x34,         /* Usage (Ry)                             */
     0x15, 0x00,         /* Logical Minimum (0)                    */
     0x26, 0xFF, 0x00,   /* Logical Maximum (255)                  */
     0x75, 0x08,         /* Report Size (8)                        */
@@ -292,10 +292,10 @@ static const uint8_t ds4_bt_hid_descriptor[] = {
     0x95, 0x01,         /* Report Count (1)                       */
     0x81, 0x02,         /* Input (Data, Var, Abs)                 */
 
-    /* bytes 10-11: L2/R2 analog (simulation page) */
-    0x05, 0x02,         /* Usage Page (Simulation Controls)       */
-    0x09, 0xC4,         /* Usage (Accelerator)                    */
-    0x09, 0xC5,         /* Usage (Brake)                          */
+    /* bytes 10-11: L2/R2 analog trigger axes */
+    0x05, 0x01,         /* Usage Page (Generic Desktop)           */
+    0x09, 0x32,         /* Usage (Z)                              */
+    0x09, 0x35,         /* Usage (Rz)                             */
     0x15, 0x00,         /* Logical Minimum (0)                    */
     0x26, 0xFF, 0x00,   /* Logical Maximum (255)                  */
     0x75, 0x08,         /* Report Size (8)                        */
@@ -511,155 +511,6 @@ static void set_rumble(uint8_t right_intensity, uint8_t left_intensity)
     ledc_update_duty(LEDC_MODE, LEDC_OUTPUT_RUM_R);
     ledc_set_duty(LEDC_MODE, LEDC_OUTPUT_RUM_L, left_intensity);
     ledc_update_duty(LEDC_MODE, LEDC_OUTPUT_RUM_L);
-}
-
-/* ------------------------------------------------------------------ */
-/*  Raw SDP record builder                                              */
-/* ------------------------------------------------------------------ */
-
-static uint8_t ds4_sdp_record[1024];
-static size_t  ds4_sdp_record_len = 0;
-
-static inline void sdp_put_u8(uint8_t **p, uint8_t v)          { *(*p)++ = v; }
-static inline void sdp_put_u16(uint8_t **p, uint16_t v)
-{
-    *(*p)++ = (uint8_t)((v >> 8) & 0xFF);
-    *(*p)++ = (uint8_t)(v & 0xFF);
-}
-static inline void sdp_put_attr_id(uint8_t **p, uint16_t id)
-{
-    sdp_put_u8(p, 0x09); sdp_put_u16(p, id);
-}
-static inline void sdp_put_bool_attr(uint8_t **p, uint16_t id, bool v)
-{
-    sdp_put_attr_id(p, id); sdp_put_u8(p, 0x28); sdp_put_u8(p, v ? 0x01 : 0x00);
-}
-static inline void sdp_put_u8_attr(uint8_t **p, uint16_t id, uint8_t v)
-{
-    sdp_put_attr_id(p, id); sdp_put_u8(p, 0x08); sdp_put_u8(p, v);
-}
-static inline void sdp_put_u16_attr(uint8_t **p, uint16_t id, uint16_t v)
-{
-    sdp_put_attr_id(p, id); sdp_put_u8(p, 0x09); sdp_put_u16(p, v);
-}
-static inline void sdp_put_text_attr(uint8_t **p, uint16_t id, const char *text)
-{
-    size_t len = strlen(text);
-    sdp_put_attr_id(p, id);
-    if (len <= 255) { sdp_put_u8(p, 0x25); sdp_put_u8(p, (uint8_t)len); }
-    else            { sdp_put_u8(p, 0x26); sdp_put_u16(p, (uint16_t)len); }
-    memcpy(*p, text, len); *p += len;
-}
-
-static size_t build_ds4_sdp_record(uint8_t *buf, size_t buf_size)
-{
-    if (buf_size < 512) return 0;
-    uint8_t *p = buf;
-
-    sdp_put_u8(&p, 0x36);
-    uint8_t *root_len_ptr = p; p += 2;
-
-    /* ServiceClassIDList: HID */
-    sdp_put_attr_id(&p, 0x0001);
-    sdp_put_u8(&p, 0x35); sdp_put_u8(&p, 0x03);
-    sdp_put_u8(&p, 0x19); sdp_put_u16(&p, 0x1124);
-
-    /* ProtocolDescriptorList */
-    sdp_put_attr_id(&p, 0x0004);
-    sdp_put_u8(&p, 0x35); sdp_put_u8(&p, 0x0D);
-    sdp_put_u8(&p, 0x35); sdp_put_u8(&p, 0x06);
-    sdp_put_u8(&p, 0x19); sdp_put_u16(&p, 0x0100);
-    sdp_put_u8(&p, 0x09); sdp_put_u16(&p, 0x0011);
-    sdp_put_u8(&p, 0x35); sdp_put_u8(&p, 0x03);
-    sdp_put_u8(&p, 0x19); sdp_put_u16(&p, 0x0011);
-
-    /* BrowseGroupList */
-    sdp_put_attr_id(&p, 0x0005);
-    sdp_put_u8(&p, 0x35); sdp_put_u8(&p, 0x03);
-    sdp_put_u8(&p, 0x19); sdp_put_u16(&p, 0x1002);
-
-    /* LanguageBaseAttributeIDList */
-    sdp_put_attr_id(&p, 0x0006);
-    sdp_put_u8(&p, 0x35); sdp_put_u8(&p, 0x09);
-    sdp_put_u8(&p, 0x09); sdp_put_u16(&p, 0x656E);
-    sdp_put_u8(&p, 0x09); sdp_put_u16(&p, 0x006A);
-    sdp_put_u8(&p, 0x09); sdp_put_u16(&p, 0x0100);
-
-    /* BluetoothProfileDescriptorList */
-    sdp_put_attr_id(&p, 0x0009);
-    sdp_put_u8(&p, 0x35); sdp_put_u8(&p, 0x08);
-    sdp_put_u8(&p, 0x35); sdp_put_u8(&p, 0x06);
-    sdp_put_u8(&p, 0x19); sdp_put_u16(&p, 0x1124);
-    sdp_put_u8(&p, 0x09); sdp_put_u16(&p, 0x0100);
-
-    /* AdditionalProtocolDescriptorLists */
-    sdp_put_attr_id(&p, 0x000D);
-    sdp_put_u8(&p, 0x35); sdp_put_u8(&p, 0x0F);
-    sdp_put_u8(&p, 0x35); sdp_put_u8(&p, 0x0D);
-    sdp_put_u8(&p, 0x35); sdp_put_u8(&p, 0x06);
-    sdp_put_u8(&p, 0x19); sdp_put_u16(&p, 0x0100);
-    sdp_put_u8(&p, 0x09); sdp_put_u16(&p, 0x0013);
-    sdp_put_u8(&p, 0x35); sdp_put_u8(&p, 0x03);
-    sdp_put_u8(&p, 0x19); sdp_put_u16(&p, 0x0011);
-
-    /* Human-readable strings */
-    sdp_put_text_attr(&p, 0x0100, "Wireless Controller");
-    sdp_put_text_attr(&p, 0x0101, "DualShock 4 Compatible");
-    sdp_put_text_attr(&p, 0x0102, "Sony");
-
-    /* HID attributes */
-    sdp_put_u16_attr(&p, 0x0200, 0x0100);
-    sdp_put_u16_attr(&p, 0x0201, 0x0111);
-    sdp_put_u8_attr (&p, 0x0202, 0x08);
-    sdp_put_u8_attr (&p, 0x0203, 0x00);
-    sdp_put_bool_attr(&p, 0x0204, true);
-    sdp_put_bool_attr(&p, 0x0205, true);
-
-    /* HIDDescriptorList */
-    sdp_put_attr_id(&p, 0x0206);
-    sdp_put_u8(&p, 0x36);
-    uint8_t *desc_list_len_ptr = p; p += 2;
-    sdp_put_u8(&p, 0x36);
-    uint8_t *desc_entry_len_ptr = p; p += 2;
-    sdp_put_u8(&p, 0x08); sdp_put_u8(&p, 0x22);
-    if (sizeof(ds4_bt_hid_descriptor) <= 255) {
-        sdp_put_u8(&p, 0x25);
-        sdp_put_u8(&p, (uint8_t)sizeof(ds4_bt_hid_descriptor));
-    } else {
-        sdp_put_u8(&p, 0x26);
-        sdp_put_u16(&p, (uint16_t)sizeof(ds4_bt_hid_descriptor));
-    }
-    memcpy(p, ds4_bt_hid_descriptor, sizeof(ds4_bt_hid_descriptor));
-    p += sizeof(ds4_bt_hid_descriptor);
-    size_t desc_entry_len = (size_t)(p - (desc_entry_len_ptr + 2));
-    desc_entry_len_ptr[0] = (uint8_t)((desc_entry_len >> 8) & 0xFF);
-    desc_entry_len_ptr[1] = (uint8_t)(desc_entry_len       & 0xFF);
-    size_t desc_list_len = (size_t)(p - (desc_list_len_ptr + 2));
-    desc_list_len_ptr[0] = (uint8_t)((desc_list_len >> 8) & 0xFF);
-    desc_list_len_ptr[1] = (uint8_t)(desc_list_len       & 0xFF);
-
-    /* HIDLanguageIDBase */
-    sdp_put_attr_id(&p, 0x0207);
-    sdp_put_u8(&p, 0x35); sdp_put_u8(&p, 0x08);
-    sdp_put_u8(&p, 0x35); sdp_put_u8(&p, 0x06);
-    sdp_put_u8(&p, 0x09); sdp_put_u16(&p, 0x0409);
-    sdp_put_u8(&p, 0x09); sdp_put_u16(&p, 0x0100);
-
-    sdp_put_bool_attr(&p, 0x0208, false);
-    sdp_put_bool_attr(&p, 0x0209, true);
-    sdp_put_bool_attr(&p, 0x020A, true);
-    sdp_put_u16_attr(&p, 0x020B, 0x0100);
-    sdp_put_u16_attr(&p, 0x020C, 0x0C80);
-    sdp_put_bool_attr(&p, 0x020D, true);
-    sdp_put_bool_attr(&p, 0x020E, false);
-    sdp_put_u16_attr(&p, 0x020F, 0x0640);
-    sdp_put_u16_attr(&p, 0x0210, 0x0320);
-
-    size_t root_len = (size_t)(p - (root_len_ptr + 2));
-    root_len_ptr[0] = (uint8_t)((root_len >> 8) & 0xFF);
-    root_len_ptr[1] = (uint8_t)(root_len       & 0xFF);
-
-    return (size_t)(p - buf);
 }
 
 /* ------------------------------------------------------------------ */
@@ -881,7 +732,7 @@ static void send_hid_report_raw(uint8_t *report, size_t len)
     }
 }
 
-void send_gamepad_report(void)
+static void send_gamepad_report_from_state(void)
 {
     if (!s_bt_hid_param.hid_dev ||
         !esp_hidd_dev_connected(s_bt_hid_param.hid_dev)) {
@@ -891,29 +742,6 @@ void send_gamepad_report(void)
     static uint8_t  counter   = 0;
     static uint16_t timestamp = 0;
     static uint8_t  touch_seq = 0;
-
-    /* Read ADC → left stick axes */
-    int raw_x = 2048, raw_y = 2048;
-    esp_err_t err_x = adc_oneshot_read(adc1_handle, ADC_CHANNEL_6, &raw_x);
-    esp_err_t err_y = adc_oneshot_read(adc1_handle, ADC_CHANNEL_7, &raw_y);
-    if (err_x == ESP_OK) {
-        g_axis[0] = (uint8_t)(raw_x >> 4);
-    } else {
-        ESP_LOGW(TAG, "Left stick X ADC read failed: %s", esp_err_to_name(err_x));
-    }
-    if (err_y == ESP_OK) {
-        g_axis[1] = (uint8_t)(raw_y >> 4);
-    } else {
-        ESP_LOGW(TAG, "Left stick Y ADC read failed: %s", esp_err_to_name(err_y));
-    }
-
-    /* Read button (Cross) from GPIO32, active-low */
-    int cross_level = gpio_get_level(GPIO_NUM_32);
-    if (cross_level >= 0) {
-        g_btn[1] = (cross_level == 0);
-    } else {
-        ESP_LOGW(TAG, "Cross button GPIO read failed");
-    }
 
     /* Build 79-byte report */
     uint8_t report[DS4_BT_INPUT_TOTAL_LEN] = {0};
@@ -963,6 +791,107 @@ void send_gamepad_report(void)
     send_hid_report_raw(report, sizeof(report));
 }
 
+void send_gamepad_report(void)
+{
+    if (!s_bt_hid_param.hid_dev ||
+        !esp_hidd_dev_connected(s_bt_hid_param.hid_dev)) {
+        return;
+    }
+
+    /* Read ADC → left stick axes */
+    int raw_x = 2048, raw_y = 2048;
+    esp_err_t err_x = adc_oneshot_read(adc1_handle, ADC_CHANNEL_6, &raw_x);
+    esp_err_t err_y = adc_oneshot_read(adc1_handle, ADC_CHANNEL_7, &raw_y);
+    if (err_x == ESP_OK) {
+        g_axis[0] = (uint8_t)(raw_x >> 4);
+    } else {
+        ESP_LOGW(TAG, "Left stick X ADC read failed: %s", esp_err_to_name(err_x));
+    }
+    if (err_y == ESP_OK) {
+        g_axis[1] = (uint8_t)(raw_y >> 4);
+    } else {
+        ESP_LOGW(TAG, "Left stick Y ADC read failed: %s", esp_err_to_name(err_y));
+    }
+
+    /* Read button (Cross) from GPIO32, active-low */
+    int cross_level = gpio_get_level(GPIO_NUM_32);
+    if (cross_level >= 0) {
+        g_btn[1] = (cross_level == 0);
+    } else {
+        ESP_LOGW(TAG, "Cross button GPIO read failed");
+    }
+
+    send_gamepad_report_from_state();
+}
+
+void send_gamepad_report_test(void)
+{
+    const uint32_t analog_cycle_ms = 2000;
+    const uint32_t button_step_ms = 1000;
+    const uint32_t button_active_ms = button_step_ms / 2;
+    static const uint8_t button_indexes[] = {
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13
+    };
+    static const ds4_hat_t hat_directions[] = {
+        DS4_HAT_N, DS4_HAT_NE, DS4_HAT_E, DS4_HAT_SE,
+        DS4_HAT_S, DS4_HAT_SW, DS4_HAT_W, DS4_HAT_NW
+    };
+    const uint32_t test_stage_count =
+        sizeof(button_indexes) / sizeof(button_indexes[0]) +
+        sizeof(hat_directions) / sizeof(hat_directions[0]) + 1;
+    const uint32_t test_cycle_ms = test_stage_count * button_step_ms;
+    static int64_t cycle_start_us = 0;
+
+    if (!s_bt_hid_param.hid_dev ||
+        !esp_hidd_dev_connected(s_bt_hid_param.hid_dev)) {
+        cycle_start_us = 0;
+        return;
+    }
+
+    int64_t now_us = esp_timer_get_time();
+    if (cycle_start_us == 0) {
+        cycle_start_us = now_us;
+    }
+
+    uint32_t test_elapsed_ms =
+        (uint32_t)((now_us - cycle_start_us) / 1000) % test_cycle_ms;
+    uint32_t analog_elapsed_ms = test_elapsed_ms % analog_cycle_ms;
+    uint32_t analog_last_step_ms = analog_cycle_ms - DS4_REPORT_INTERVAL_MS;
+    uint8_t r2_percent = (uint8_t)(
+        (analog_elapsed_ms * 100 + analog_last_step_ms / 2) /
+        analog_last_step_ms);
+
+    /* Sweep all four stick axes with quarter-cycle offsets. */
+    for (size_t axis = 0; axis < 4; axis++) {
+        uint32_t axis_phase =
+            (analog_elapsed_ms + axis * (analog_cycle_ms / 4)) %
+            analog_cycle_ms;
+        uint32_t axis_progress = axis_phase <= analog_cycle_ms / 2
+            ? axis_phase * 2
+            : (analog_cycle_ms - axis_phase) * 2;
+        g_axis[axis] = (uint8_t)(axis_progress * 255 / analog_cycle_ms);
+    }
+
+    g_trigger[0] = (uint8_t)((uint16_t)(100 - r2_percent) * 255 / 100);
+    g_trigger[1] = (uint8_t)((uint16_t)r2_percent * 255 / 100);
+
+    memset(g_btn, 0, sizeof(g_btn));
+    g_hat = DS4_HAT_NONE;
+    uint32_t stage = test_elapsed_ms / button_step_ms;
+    if ((test_elapsed_ms % button_step_ms) < button_active_ms) {
+        if (stage < sizeof(button_indexes) / sizeof(button_indexes[0])) {
+            g_btn[button_indexes[stage]] = true;
+        } else {
+            stage -= sizeof(button_indexes) / sizeof(button_indexes[0]);
+            if (stage < sizeof(hat_directions) / sizeof(hat_directions[0])) {
+                g_hat = hat_directions[stage];
+            }
+        }
+    }
+
+    send_gamepad_report_from_state();
+}
+
 /* ------------------------------------------------------------------ */
 /*  Main polling task                                                   */
 /* ------------------------------------------------------------------ */
@@ -978,7 +907,7 @@ static void bt_hid_report_task(void *pvParameters)
     for (;;) {
         if (!g_hid_connected) break;
         if (esp_hidd_dev_connected(s_bt_hid_param.hid_dev)) {
-            send_gamepad_report();
+            send_gamepad_report_test();
         }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -1193,30 +1122,6 @@ static void esp_sdp_cb(esp_sdp_cb_event_t event, esp_sdp_cb_param_t *param)
             ESP_LOGI(TAG, "DIP record: %s", esp_err_to_name(err));
         }
 
-        /* HID service record */
-        {
-            ds4_sdp_record_len = build_ds4_sdp_record(
-                ds4_sdp_record, sizeof(ds4_sdp_record));
-            if (!ds4_sdp_record_len) {
-                ESP_LOGE(TAG, "Failed to build DS4 SDP record");
-                return;
-            }
-            static char svc_name[] = "Wireless Controller";
-            esp_bluetooth_sdp_raw_record_t raw = {
-                .hdr = {
-                    .type                = ESP_SDP_TYPE_RAW,
-                    .service_name        = svc_name,
-                    .service_name_length = sizeof(svc_name),
-                    .user1_ptr           = ds4_sdp_record,
-                    .user1_ptr_len       = ds4_sdp_record_len,
-                    .rfcomm_channel_number = -1,
-                    .l2cap_psm           = 0x11
-                }
-            };
-            esp_err_t err = esp_sdp_create_record(
-                (esp_bluetooth_sdp_record_t *)&raw);
-            ESP_LOGI(TAG, "HID record: %s", esp_err_to_name(err));
-        }
         break;
 
     case ESP_SDP_CREATE_RECORD_COMP_EVT:

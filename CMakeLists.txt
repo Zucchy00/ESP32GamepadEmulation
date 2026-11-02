@@ -2,5 +2,8 @@
 # in this exact order for cmake to work correctly
 cmake_minimum_required(VERSION 3.16)
 
+# DS4 Bluetooth input payloads are 78 bytes; Bluedroid defaults to 64.
+add_compile_definitions(HID_DEV_MTU_SIZE=128)
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(esp_hid_device)
