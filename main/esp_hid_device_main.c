@@ -35,7 +35,7 @@
  * 3. Feature report 0x05 (calibration)
  *    The host sends GET_REPORT(FEATURE, 0x05) after connection.
  *    We respond in ESP_HIDD_FEATURE_EVENT (trans_type == GET_REPORT).
- *    Payload is 37 bytes matching 0x95,0x25 in the descriptor.
+ *    Its 40-byte payload includes the Bluetooth calibration CRC.
  *
  * 4. Output report 0x11 (lightbar + rumble)
  *    Received via ESP_HIDD_OUTPUT_EVENT.  Offsets inside the payload
@@ -133,6 +133,11 @@
 #define DS4_BT_INPUT_REPORT_ID   0x11
 #define DS4_BT_INPUT_TOTAL_LEN   79     /* report ID + 78 payload bytes */
 #define DS4_BT_CRC_OFFSET        75     /* first byte of CRC field       */
+#define DS4_FEATURE_05_REPORT_ID  0x05
+#define DS4_FEATURE_05_DATA_LEN  36
+#define DS4_FEATURE_05_CRC_OFFSET DS4_FEATURE_05_DATA_LEN
+#define DS4_FEATURE_05_PAYLOAD_LEN 40
+#define DS4_FEATURE_05_CRC_SEED  0xA3
 #define DS4_ACCEL_RES_PER_G      8192
 #define DS4_ACCEL_Y_REST         (-DS4_ACCEL_RES_PER_G)
 #define DS4_TEMPERATURE_DEFAULT  0x65
@@ -145,6 +150,9 @@
 #define DS4_OUT_LED_R      7
 #define DS4_OUT_LED_G      8
 #define DS4_OUT_LED_B      9
+#define DS4_OUT_VALID_FLAGS 2
+#define DS4_OUT_VALID_RUMBLE 0x01
+#define DS4_OUT_VALID_LIGHTBAR 0x02
 
 /* ------------------------------------------------------------------ */
 /*  Macros                                                              */
@@ -321,14 +329,14 @@ static const uint8_t ds4_bt_hid_descriptor[] = {
     0x95, 0x4D,         /* Report Count (77)                      */
     0x91, 0x02,         /* Output (Data, Var, Abs)                */
 
-    /* ---- Feature Report 0x05 (37 bytes: IMU calibration) ---- */
+    /* ---- Feature Report 0x05 (40-byte payload, including BT CRC) ---- */
     0x85, 0x05,         /* Report ID (0x05)                       */
     0x06, 0x00, 0xFF,   /* Usage Page (Vendor)                    */
     0x09, 0x24,         /* Usage (0x24)                           */
     0x15, 0x00,         /* Logical Minimum (0)                    */
     0x26, 0xFF, 0x00,   /* Logical Maximum (255)                  */
     0x75, 0x08,         /* Report Size (8)                        */
-    0x95, 0x25,         /* Report Count (37)  ← exact calib size  */
+    0x95, 0x28,         /* Report Count (40)                       */
     0xB1, 0x02,         /* Feature (Data, Var, Abs)               */
 
     /* ---- Feature Report 0x02 (37 bytes: MAC address — required by hid-sony BT init) ---- */
@@ -578,36 +586,42 @@ static void ds4_fill_common_fields(uint8_t *report,
 /*  Feature Report 0x05 — IMU calibration                              */
 /*                                                                      */
 /*  Per https://www.psdevwiki.com/ps4/DS4-BT#GET_FEATURE               */
-/*  37-byte payload (matches descriptor 0x95,0x25):                    */
+/*  40-byte BT payload (41 bytes including report ID):                 */
 /*   [0..5]   Gyro bias X/Y/Z  (LE int16, 0 = no bias)                */
-/*   [6..17]  Gyro ±sensitivity X/Y/Z (LE int16)                       */
+/*   [6..11]  Gyro + sensitivity X/Y/Z (LE int16)                     */
+/*   [12..17] Gyro - sensitivity X/Y/Z (LE int16)                     */
 /*   [18..21] Gyro speed ±range in deg/s (LE int16)                    */
 /*   [22..33] Accel ±sensitivity X/Y/Z (LE int16)                      */
-/*   [34..36] Reserved (zero)                                           */
+/*   [34..35] Reserved (zero)                                           */
+/*   [36..39] CRC32 (seed 0xA3, then report ID and data[0..35])         */
 /* ------------------------------------------------------------------ */
 
-static void send_ds4_feature_report_05(void)
+static void send_ds4_feature_report_05(uint8_t map_index)
 {
     if (!s_bt_hid_param.hid_dev ||
         !esp_hidd_dev_connected(s_bt_hid_param.hid_dev)) {
         return;
     }
 
-    uint8_t feat[37] = {0};
+    uint8_t feat[DS4_FEATURE_05_PAYLOAD_LEN] = {0};
 
     /* Gyro bias: zero (no offset) */
 
-    /* Gyro full-scale ±8192 LSB = ±2000 dps */
-    put_le16(&feat[6],   8192);
-    put_le16(&feat[8],  -8192);
-    put_le16(&feat[10],  8192);
-    put_le16(&feat[12], -8192);
-    put_le16(&feat[14],  8192);
-    put_le16(&feat[16], -8192);
+    /*
+     * Bluetooth stores positive gyro scales before negative scales.
+     * Matching the sensitivity span to the sum of the positive speed
+     * magnitudes yields the DS4's 1024-count/(deg/s) calibration scale.
+     */
+    put_le16(&feat[6],   2000);
+    put_le16(&feat[8],   2000);
+    put_le16(&feat[10],  2000);
+    put_le16(&feat[12], -2000);
+    put_le16(&feat[14], -2000);
+    put_le16(&feat[16], -2000);
 
-    /* Speed range ±2000 deg/s */
+    /* Speed fields are positive magnitudes and are summed by DS4 hosts. */
     put_le16(&feat[18],  2000);
-    put_le16(&feat[20], -2000);
+    put_le16(&feat[20],  2000);
 
     /* Accel full-scale ±8192 LSB = ±4 g (matches DS4_ACCEL_RES_PER_G) */
     put_le16(&feat[22],  8192);
@@ -617,16 +631,31 @@ static void send_ds4_feature_report_05(void)
     put_le16(&feat[30],  8192);
     put_le16(&feat[32], -8192);
 
-    /* feat[34..36] reserved, already 0 */
+    /* feat[34..35] reserved, already 0 */
 
-    esp_err_t err = esp_bt_hid_device_send_report(
-        ESP_HIDD_REPORT_TYPE_FEATURE,
-        0x05,
-        sizeof(feat),
-        feat
+    uint8_t crc_input[2 + DS4_FEATURE_05_DATA_LEN];
+    crc_input[0] = DS4_FEATURE_05_CRC_SEED;
+    crc_input[1] = DS4_FEATURE_05_REPORT_ID;
+    memcpy(&crc_input[2], feat, DS4_FEATURE_05_DATA_LEN);
+    uint32_t report_crc = crc32(crc_input, sizeof(crc_input));
+    feat[DS4_FEATURE_05_CRC_OFFSET] = (uint8_t)(report_crc & 0xFF);
+    feat[DS4_FEATURE_05_CRC_OFFSET + 1] = (uint8_t)((report_crc >> 8) & 0xFF);
+    feat[DS4_FEATURE_05_CRC_OFFSET + 2] = (uint8_t)((report_crc >> 16) & 0xFF);
+    feat[DS4_FEATURE_05_CRC_OFFSET + 3] = (uint8_t)((report_crc >> 24) & 0xFF);
+
+    esp_err_t err = esp_hidd_dev_feature_set(
+        s_bt_hid_param.hid_dev,
+        map_index,
+        DS4_FEATURE_05_REPORT_ID,
+        feat,
+        sizeof(feat)
     );
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "feature 0x05 send failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "feature 0x05 reply rejected (payload=%u): %s",
+                 (unsigned)sizeof(feat), esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "feature 0x05 reply queued (payload=%u crc=%08" PRIx32 ")",
+                 (unsigned)sizeof(feat), report_crc);
     }
 }
 
@@ -900,7 +929,8 @@ static void bt_hid_report_task(void *pvParameters)
 {
     printf(
         "########################################################################\n"
-        "BT HID DS4-compatible gamepad running.\n"
+        "BT HID DS4-compatible gamepad self-test running.\n"
+        "Testing all buttons, D-pad directions, four stick axes, and L2/R2.\n"
         "########################################################################\n\n"
     );
 
@@ -941,21 +971,14 @@ static void bt_hid_task_shut_down(void)
  *   .connect     { dev, status }
  *   .disconnect  { dev, reason }
  *   .output      { dev, usage, report_id, length, data, map_index }
- *   .feature     { dev, usage, report_id, length, data, map_index }
- *                NOTE: feature fires for SET_REPORT only in the
- *                esp_hid wrapper; GET_REPORT is handled internally by
- *                bluedroid after our descriptor fix.
+ *   .feature     { dev, usage, report_id, length, data, map_index,
+ *                  trans_type, report_type }
  *   .protocol_mode { dev, protocol_mode, map_index }
  *   .control     { dev, control, map_index }
  *
- * There is NO .start, .get_report, .trans_type, or .report_type in this
- * version.  ESP_HIDD_START_EVENT has a null param — guard accordingly.
- *
- * The FEATURE_EVENT is also used by some IDF versions for GET_REPORT
- * responses via trans_type; where that field exists it is accessed as
- * param->feature.trans_type.  Since we cannot guarantee its presence
- * we always call send_ds4_feature_report_05() when report_id == 0x05
- * regardless, which is safe because the PS4 only ever GETs it.
+ * In ESP-IDF 5.4.2, Classic Bluetooth GET_REPORT and SET_REPORT requests
+ * arrive as FEATURE_EVENTs. The app must explicitly answer GET_REPORT.
+ * ESP_HIDD_START_EVENT may have a null param.
  */
 
 static void bt_hidd_event_callback(void *handler_args,
@@ -975,9 +998,8 @@ static void bt_hidd_event_callback(void *handler_args,
          * version; use it only if non-NULL and check the connect event
          * for confirmation.
          */
-        ESP_LOGI(TAG, "HID stack started");
-        set_rgb_color(0, 0, 255);   /* blue = waiting */
-        break;
+         ESP_LOGI(TAG, "HID stack started");
+         break;
 
     /* ---- Host connected ---- */
     case ESP_HIDD_CONNECT_EVENT:
@@ -985,11 +1007,9 @@ static void bt_hidd_event_callback(void *handler_args,
             ESP_LOGI(TAG, "Host connected");
             g_hid_connected = true;
             bt_hid_task_start_up();
-            set_rgb_color(0, 255, 0);   /* green = connected */
         } else {
             ESP_LOGW(TAG, "Connect failed");
             g_hid_connected = false;
-            set_rgb_color(255, 0, 0);
         }
         break;
 
@@ -1015,19 +1035,19 @@ static void bt_hidd_event_callback(void *handler_args,
             param->output.length    >= 10) {
 
             const uint8_t *out = param->output.data;
-            uint8_t rumble_r = out[DS4_OUT_RUMBLE_R];
-            uint8_t rumble_l = out[DS4_OUT_RUMBLE_L];
-            uint8_t led_r    = out[DS4_OUT_LED_R];
-            uint8_t led_g    = out[DS4_OUT_LED_G];
-            uint8_t led_b    = out[DS4_OUT_LED_B];
+            uint8_t valid_flags = out[DS4_OUT_VALID_FLAGS];
+            if (valid_flags & DS4_OUT_VALID_LIGHTBAR) {
+                uint8_t led_r = out[DS4_OUT_LED_R];
+                uint8_t led_g = out[DS4_OUT_LED_G];
+                uint8_t led_b = out[DS4_OUT_LED_B];
 
-            ESP_LOGI(TAG,
-                     "Output → Lightbar R=%u G=%u B=%u  "
-                     "Rumble right=%u left=%u",
-                     led_r, led_g, led_b, rumble_r, rumble_l);
-
-            set_rgb_color(led_r, led_g, led_b);
-            set_rumble(rumble_r, rumble_l);
+                ESP_LOGI(TAG, "Host lightbar → R=%u G=%u B=%u",
+                         led_r, led_g, led_b);
+                set_rgb_color(led_r, led_g, led_b);
+            }
+            if (valid_flags & DS4_OUT_VALID_RUMBLE) {
+                set_rumble(out[DS4_OUT_RUMBLE_R], out[DS4_OUT_RUMBLE_L]);
+            }
         } else if (param) {
             ESP_LOGW(TAG, "Unhandled OUTPUT id=%u len=%u",
                      (unsigned)param->output.report_id,
@@ -1043,16 +1063,28 @@ static void bt_hidd_event_callback(void *handler_args,
             ESP_LOGW(TAG, "FEATURE event has no report data");
             break;
         }
-        ESP_LOGI(TAG, "FEATURE id=0x%02x len=%u",
+        ESP_LOGI(TAG, "FEATURE transaction=%u type=%u id=0x%02x len=%u",
+                 (unsigned)param->feature.trans_type,
+                 (unsigned)param->feature.report_type,
                  (unsigned)param->feature.report_id,
                  (unsigned)param->feature.length);
+
+        if (param->feature.trans_type != ESP_HID_TRANS_GET_REPORT) {
+            break;
+        }
+        if (param->feature.report_type != ESP_HID_REPORT_TYPE_FEATURE) {
+            ESP_LOGW(TAG, "Ignoring GET_REPORT with non-feature type %u",
+                     (unsigned)param->feature.report_type);
+            break;
+        }
 
         switch (param->feature.report_id) {
         case 0x02:
             send_ds4_feature_report_02();   /* MAC address  — hid-sony Linux init */
             break;
         case 0x05:
-            send_ds4_feature_report_05();   /* IMU calibration — PS4 + SDL        */
+            send_ds4_feature_report_05(param->feature.map_index);
+            /* IMU calibration — PS4 + SDL */
             break;
         case 0xA3:
             send_ds4_feature_report_a3();   /* Firmware version — hid-sony Linux  */
@@ -1078,7 +1110,7 @@ static void bt_hidd_event_callback(void *handler_args,
         g_hid_connected = false;
         set_rumble(0, 0);
         bt_hid_task_shut_down();
-        set_rgb_color(255, 255, 255);   /* white = idle */
+        set_rgb_color(0, 0, 0);
         break;
 
     /* ---- Stack stopped ---- */
@@ -1086,7 +1118,7 @@ static void bt_hidd_event_callback(void *handler_args,
         ESP_LOGI(TAG, "HID stack stopped");
         g_hid_connected = false;
         set_rumble(0, 0);
-        set_rgb_color(0, 255, 255);
+        set_rgb_color(0, 0, 0);
         break;
 
     default:
@@ -1144,7 +1176,7 @@ void start_ps4_hid(void)
 {
     init_ledc();
     init_hardware_pins();
-    set_rgb_color(255, 255, 255);   /* white = booting */
+    set_rgb_color(0, 0, 0);
 
     generate_serial_number(g_serial_number, sizeof(g_serial_number));
     bt_hid_config.serial_number = g_serial_number;

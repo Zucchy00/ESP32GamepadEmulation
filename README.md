@@ -86,6 +86,15 @@ ESP-IDF's HID device profile publishes the HID SDP record, including the
 configured report descriptor. The application separately registers the Device
 ID Profile record; it does not create a second raw HID SDP record.
 
+The Bluetooth calibration Feature Report 0x05 uses a 40-byte payload, including
+its CRC32, in addition to the report ID. Its calibration field order and CRC
+are required by DS4 hosts. Gyroscope calibration values are selected to match
+the DS4's 1024-count-per-degree-per-second scale.
+
+The ESP32 RGB LED follows the DS4 Bluetooth output report's lightbar color when
+the host marks that color valid. Connection-state colors do not override the
+host-selected lightbar; the LED turns off when the HID connection ends.
+
 ### Step 4: Build and Flash
 
 ```bash
