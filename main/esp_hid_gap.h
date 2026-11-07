@@ -28,6 +28,8 @@
 
 #include "esp_err.h"
 #include "esp_log.h"
+#include <stdbool.h>
+#include <stdint.h>
 
 #include "esp_bt.h"
 #if !CONFIG_BT_NIMBLE_ENABLED
@@ -74,6 +76,8 @@ void print_uuid(esp_bt_uuid_t *uuid);
 #endif
 
 esp_err_t esp_hid_gap_init(uint8_t mode);
+void esp_hid_gap_set_auth_complete_callback(
+    void (*callback)(const uint8_t *bd_addr, bool success));
 
 esp_err_t esp_hid_ble_gap_adv_init(uint16_t appearance, const char *device_name);
 esp_err_t esp_hid_ble_gap_adv_start(void);

@@ -94,11 +94,13 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "freertos/queue.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
+#include "nvs.h"
 #include "esp_bt.h"
 #include "esp_bt_defs.h"
 #include "esp_bt_main.h"
@@ -193,6 +195,22 @@ ds4_hat_t g_hat       = DS4_HAT_NONE;
 static uint32_t          crc32_table[256];
 static volatile bool     g_hid_connected = false;
 static char              g_serial_number[13] = "00000001";
+static esp_bd_addr_t     s_latest_host = {0};
+static bool              s_latest_host_valid = false;
+static QueueHandle_t     s_host_action_queue;
+
+#define HID_NVS_NAMESPACE "ds4_hid"
+#define HID_NVS_HOST_KEY  "latest_host"
+
+typedef enum {
+    HOST_ACTION_RECONNECT,
+    HOST_ACTION_SAVE_ADDRESS
+} host_action_type_t;
+
+typedef struct {
+    host_action_type_t type;
+    esp_bd_addr_t address;
+} host_action_t;
 
 typedef struct {
     TaskHandle_t    task_hdl;
@@ -937,7 +955,7 @@ static void bt_hid_report_task(void *pvParameters)
     for (;;) {
         if (!g_hid_connected) break;
         if (esp_hidd_dev_connected(s_bt_hid_param.hid_dev)) {
-            send_gamepad_report();
+            send_gamepad_report_test();
         }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -960,6 +978,201 @@ static void bt_hid_task_shut_down(void)
     g_hid_connected = false;
     if (s_bt_hid_param.task_hdl) {
         vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+
+static bool persist_latest_host(const uint8_t *bd_addr)
+{
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(HID_NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    if (err == ESP_OK) {
+        err = nvs_set_blob(nvs, HID_NVS_HOST_KEY, bd_addr, sizeof(s_latest_host));
+        if (err == ESP_OK) {
+            err = nvs_commit(nvs);
+        }
+        nvs_close(nvs);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to save paired host address: %s",
+                 esp_err_to_name(err));
+        return false;
+    }
+
+    memcpy(s_latest_host, bd_addr, sizeof(s_latest_host));
+    s_latest_host_valid = true;
+    ESP_LOGI(TAG, "Saved latest paired host %02x:%02x:%02x:%02x:%02x:%02x",
+             bd_addr[0], bd_addr[1], bd_addr[2],
+             bd_addr[3], bd_addr[4], bd_addr[5]);
+    return true;
+}
+
+static void remove_older_bonds(const uint8_t *latest_addr)
+{
+    int bond_count = esp_bt_gap_get_bond_device_num();
+    if (bond_count <= 1) {
+        return;
+    }
+
+    esp_bd_addr_t *bonded_hosts =
+        calloc((size_t)bond_count, sizeof(*bonded_hosts));
+    if (!bonded_hosts) {
+        ESP_LOGE(TAG, "Could not allocate Bluetooth bond list");
+        return;
+    }
+
+    int listed_count = bond_count;
+    esp_err_t err = esp_bt_gap_get_bond_device_list(&listed_count, bonded_hosts);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Could not read Bluetooth bond list: %s",
+                 esp_err_to_name(err));
+        free(bonded_hosts);
+        return;
+    }
+
+    for (int i = 0; i < listed_count; ++i) {
+        if (memcmp(bonded_hosts[i], latest_addr, sizeof(esp_bd_addr_t)) == 0) {
+            continue;
+        }
+
+        err = esp_bt_gap_remove_bond_device(bonded_hosts[i]);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Could not remove older paired host "
+                     "%02x:%02x:%02x:%02x:%02x:%02x: %s",
+                     bonded_hosts[i][0], bonded_hosts[i][1],
+                     bonded_hosts[i][2], bonded_hosts[i][3],
+                     bonded_hosts[i][4], bonded_hosts[i][5],
+                     esp_err_to_name(err));
+        } else {
+            ESP_LOGI(TAG, "Removed older paired host "
+                     "%02x:%02x:%02x:%02x:%02x:%02x",
+                     bonded_hosts[i][0], bonded_hosts[i][1],
+                     bonded_hosts[i][2], bonded_hosts[i][3],
+                     bonded_hosts[i][4], bonded_hosts[i][5]);
+        }
+    }
+
+    free(bonded_hosts);
+}
+
+static void queue_latest_host_save(const uint8_t *bd_addr, bool success)
+{
+    if (!success || !bd_addr) {
+        return;
+    }
+
+    host_action_t action = {.type = HOST_ACTION_SAVE_ADDRESS};
+    memcpy(action.address, bd_addr, sizeof(action.address));
+    if (!s_host_action_queue ||
+        xQueueSend(s_host_action_queue, &action, 0) != pdTRUE) {
+        ESP_LOGE(TAG, "Could not queue newly paired host for storage");
+    }
+}
+
+static void load_latest_host(void)
+{
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(HID_NVS_NAMESPACE, NVS_READONLY, &nvs);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        return;
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open host pairing storage: %s",
+                 esp_err_to_name(err));
+        return;
+    }
+
+    size_t address_len = sizeof(s_latest_host);
+    err = nvs_get_blob(nvs, HID_NVS_HOST_KEY, s_latest_host, &address_len);
+    nvs_close(nvs);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        return;
+    }
+    if (err != ESP_OK || address_len != sizeof(s_latest_host)) {
+        ESP_LOGW(TAG, "Saved host address is invalid (%s, length=%u)",
+                 esp_err_to_name(err), (unsigned)address_len);
+        return;
+    }
+
+    s_latest_host_valid = true;
+    ESP_LOGI(TAG, "Loaded latest paired host %02x:%02x:%02x:%02x:%02x:%02x",
+             s_latest_host[0], s_latest_host[1], s_latest_host[2],
+             s_latest_host[3], s_latest_host[4], s_latest_host[5]);
+}
+
+static void connect_to_latest_host(void)
+{
+    bool may_prune_bonds = s_latest_host_valid;
+    if (!s_latest_host_valid) {
+        int bond_count = esp_bt_gap_get_bond_device_num();
+        if (bond_count == 1) {
+            int requested_count = 1;
+            esp_bd_addr_t bonded_host = {0};
+            esp_err_t list_err =
+                esp_bt_gap_get_bond_device_list(&requested_count, &bonded_host);
+            if (list_err == ESP_OK && requested_count == 1) {
+                may_prune_bonds = persist_latest_host(bonded_host);
+            } else {
+                ESP_LOGW(TAG, "Could not read the existing Bluetooth bond: %s",
+                         esp_err_to_name(list_err));
+            }
+        } else if (bond_count > 1) {
+            ESP_LOGW(TAG, "Found %d paired hosts but no saved latest host; "
+                     "re-pair the desired host once to select it", bond_count);
+        } else if (bond_count < 0) {
+            ESP_LOGW(TAG, "Could not query paired Bluetooth hosts");
+        }
+    }
+
+    if (!s_latest_host_valid) {
+        ESP_LOGI(TAG, "No saved paired host; waiting for Bluetooth pairing");
+        return;
+    }
+
+    if (may_prune_bonds) {
+        remove_older_bonds(s_latest_host);
+    }
+
+    ESP_LOGI(TAG, "Connecting to latest paired host "
+             "%02x:%02x:%02x:%02x:%02x:%02x",
+             s_latest_host[0], s_latest_host[1], s_latest_host[2],
+             s_latest_host[3], s_latest_host[4], s_latest_host[5]);
+    esp_err_t err = esp_bt_hid_device_connect(s_latest_host);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Automatic host connection request failed: %s",
+                 esp_err_to_name(err));
+    }
+}
+
+static void host_action_task(void *arg)
+{
+    host_action_t action;
+    for (;;) {
+        if (xQueueReceive(s_host_action_queue, &action, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+
+        switch (action.type) {
+        case HOST_ACTION_SAVE_ADDRESS:
+            if (persist_latest_host(action.address)) {
+                remove_older_bonds(action.address);
+            }
+            break;
+        case HOST_ACTION_RECONNECT:
+            connect_to_latest_host();
+            break;
+        default:
+            ESP_LOGE(TAG, "Unknown Bluetooth host action %d", action.type);
+            break;
+        }
+    }
+}
+
+static void queue_latest_host_reconnect(void)
+{
+    const host_action_t action = {.type = HOST_ACTION_RECONNECT};
+    if (!s_host_action_queue ||
+        xQueueSend(s_host_action_queue, &action, 0) != pdTRUE) {
+        ESP_LOGE(TAG, "Could not queue automatic host reconnect");
     }
 }
 
@@ -993,13 +1206,14 @@ static void bt_hidd_event_callback(void *handler_args,
 
     /* ---- Stack started ---- */
     case ESP_HIDD_START_EVENT:
-        /*
-         * param may be NULL or contain a status field depending on IDF
-         * version; use it only if non-NULL and check the connect event
-         * for confirmation.
-         */
-         ESP_LOGI(TAG, "HID stack started");
-         break;
+        if (param && param->start.status != ESP_OK) {
+            ESP_LOGE(TAG, "HID stack start failed: %s",
+                     esp_err_to_name(param->start.status));
+            break;
+        }
+        ESP_LOGI(TAG, "HID stack started");
+        queue_latest_host_reconnect();
+        break;
 
     /* ---- Host connected ---- */
     case ESP_HIDD_CONNECT_EVENT:
@@ -1192,9 +1406,21 @@ void start_ps4_hid(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+    load_latest_host();
 
     /* BT GAP */
     ESP_LOGI(TAG, "Initializing HID GAP");
+    s_host_action_queue = xQueueCreate(4, sizeof(host_action_t));
+    if (!s_host_action_queue) {
+        ESP_LOGE(TAG, "Failed to create Bluetooth host action queue");
+        abort();
+    }
+    if (xTaskCreate(host_action_task, "hid_host_actions", 4096, NULL, 5, NULL)
+        != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create Bluetooth host action task");
+        abort();
+    }
+    esp_hid_gap_set_auth_complete_callback(queue_latest_host_save);
     ESP_ERROR_CHECK(esp_hid_gap_init(HID_DEV_MODE));
     ESP_ERROR_CHECK(esp_bt_gap_set_device_name(bt_hid_config.device_name));
 

@@ -95,6 +95,13 @@ The ESP32 RGB LED follows the DS4 Bluetooth output report's lightbar color when
 the host marks that color valid. Connection-state colors do not override the
 host-selected lightbar; the LED turns off when the HID connection ends.
 
+After successful Bluetooth pairing, the firmware saves that host as the latest
+paired device, removes older bonds, and attempts to reconnect to it when the HID
+profile starts at boot. If no host was saved but exactly one Bluetooth bond
+already exists, that bond is adopted as the reconnect target. With multiple
+existing bonds and no saved target, pair the intended host once; after a
+successful pairing, the other bonds are removed.
+
 ### Step 4: Build and Flash
 
 ```bash

@@ -28,6 +28,16 @@
 
 static const char *TAG = "ESP_HID_GAP";
 
+#if CONFIG_BT_HID_DEVICE_ENABLED && !CONFIG_BT_NIMBLE_ENABLED
+static void (*s_auth_complete_callback)(const uint8_t *bd_addr, bool success);
+
+void esp_hid_gap_set_auth_complete_callback(
+    void (*callback)(const uint8_t *bd_addr, bool success))
+{
+    s_auth_complete_callback = callback;
+}
+#endif
+
 // uncomment to print all devices that were seen during a scan
 #define GAP_DBG_PRINTF(...) //printf(__VA_ARGS__)
 //static const char * gap_bt_prop_type_names[5] = {"","BDNAME","COD","RSSI","EIR"};
@@ -321,6 +331,12 @@ static void handle_bt_device_result(struct disc_res_param *disc_res)
 static void bt_gap_event_handler(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
 {
     switch (event) {
+    case ESP_BT_GAP_AUTH_CMPL_EVT:
+        if (s_auth_complete_callback && param) {
+            s_auth_complete_callback(param->auth_cmpl.bda,
+                                     param->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS);
+        }
+        break;
     case ESP_BT_GAP_DISC_STATE_CHANGED_EVT: {
         ESP_LOGV(TAG, "BT GAP DISC_STATE %s", (param->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STARTED) ? "START" : "STOP");
         if (param->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STOPPED) {
